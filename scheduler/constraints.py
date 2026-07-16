@@ -1,4 +1,6 @@
 # scheduler/constraints.py
+import pandas as pd
+
 class ConstraintBuilder:
     def __init__(self, solver_class):
         self.s = solver_class
@@ -20,7 +22,6 @@ class ConstraintBuilder:
         """Aturan: Seorang guru tidak boleh mengajar di dua kelas berbeda pada slot jam yang sama"""
         for t_idx in self.idx_slot:
             for guru_nama in self.s.df_guru:
-                # Ambil daftar baris mengajar milik guru ini
                 baris_mengajar = [
                     m_idx for m_idx, row in self.s.df_mengajar.iterrows()
                     if row["Nama Guru"] == guru_nama
@@ -42,16 +43,12 @@ class ConstraintBuilder:
         """Aturan: Guru tidak boleh mengajar di hari libur MGMP mereka"""
         for m_idx, row_m in self.s.df_mengajar.iterrows():
             guru_nama = row_m["Nama Guru"]
-            
-            # Cari hari MGMP guru di database Guru
             row_g = self.s.df_guru_ref[self.s.df_guru_ref["Nama Guru"] == guru_nama]
             if not row_g.empty:
                 hari_mgmp = str(row_g.iloc[0]["Hari MGMP"]).strip()
-                
                 if hari_mgmp and hari_mgmp.lower() != 'nan':
                     for t_idx, row_t in self.s.df_slot.iterrows():
                         if str(row_t["Hari"]).lower() == hari_mgmp.lower():
-                            # Paksa nilai variabel menjadi 0 (tidak mengajar)
                             self.model.Add(self.vars[(m_idx, t_idx)] == 0)
 
     def rule_total_hours_match_target(self):
@@ -63,20 +60,23 @@ class ConstraintBuilder:
             )
 
     def rule_consecutive_hours_pembagian(self):
-        """Aturan: Menjaga struktur jam pelajaran berturut-turut berdasarkan kolom Pembagian (cth: '2,2,1')"""
-        # Aturan penyederhanaan: Sesi pembelajaran harus mengelompok sesuai dengan blok harian.
-        # AI akan mengelompokkan jam pelajaran per kelas per hari agar tidak terpecah satu-satu (menghindari "1 JP" berserakan)
+        """Aturan: Menjaga struktur jam pelajaran berturut-turut berdasarkan kolom Pembagian"""
         for m_idx, row in self.s.df_mengajar.iterrows():
             pembagian_str = str(row.get("Pembagian", "")).strip()
-            if not pembagian_str or pembagian_str.lower() == 'nan':
-                continue
-                
+            total_jp = int(row["JP"])
+            
+            # Pengaman / parser untuk mengantisipasi format tidak biasa (misalnya desimal 2.2 atau 2.1)
+            pembagian_str = pembagian_str.replace('.', ',')
+            
             try:
-                pembagian_target = [int(x) for x in pembagian_str.split(',')]
+                pembagian_target = [int(x.strip()) for x in pembagian_str.split(',') if x.strip().isdigit()]
+                if sum(pembagian_target) != total_jp:
+                    # Gagal validasi matematika jumlah, gunakan fallback standard
+                    pembagian_target = [2, 2, 1] if total_jp == 5 else [total_jp]
             except:
-                continue # abaikan jika format penulisan salah
+                pembagian_target = [2, 2, 1] if total_jp == 5 else [total_jp]
                 
-            # Kelompokkan slot waktu berdasarkan Hari
+            # Kelompokkan slot berdasarkan Hari
             hari_groups = {}
             for t_idx, row_t in self.s.df_slot.iterrows():
                 hari = row_t["Hari"]
@@ -84,14 +84,12 @@ class ConstraintBuilder:
                     hari_groups[hari] = []
                 hari_groups[hari].append(t_idx)
                 
-            # Untuk setiap hari, jumlah jam mengajar guru m_idx di kelas tersebut 
-            # hanya boleh bernilai sesuai dengan angka yang ada di aturan Pembagian (misal: 0, 1, 2)
+            # Himpunan jam per hari yang diizinkan (misalnya jika target '2,2,1', maka per hari boleh 0, 1, atau 2 JP)
             valid_jp_per_day = {0} | set(pembagian_target)
             
             for hari, t_indices in hari_groups.items():
                 jam_hari_ini = sum(self.vars[(m_idx, t_idx)] for t_idx in t_indices)
                 
-                # Gunakan variabel pembantu logika biner untuk menetapkan himpunan nilai yang diperbolehkan
                 temp_vars = []
                 for val in valid_jp_per_day:
                     b_var = self.model.NewBoolVar(f'temp_m{m_idx}_{hari}_val{val}')
