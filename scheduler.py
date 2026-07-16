@@ -1,4 +1,4 @@
-# scheduler.py (Root Utama)
+# scheduler.py
 import pandas as pd
 from scheduler.solver import SchedulerSolver
 from scheduler.exporter import ScheduleExporter
@@ -17,7 +17,7 @@ class Scheduler:
         self.df_hasil = pd.DataFrame()
 
     def prepare_engine(self):
-        # Hanya gunakan slot jam pelajaran yang aktif/berjenis 'pembelajaran'
+        # Saring slot yang aktif / hanya bertipe pembelajaran pembelajaran
         self.slot = self.hari_jam[self.hari_jam["Jenis"].str.lower() == "pembelajaran"].copy()
         self.solver_engine = SchedulerSolver(self)
 
