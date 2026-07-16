@@ -26,10 +26,11 @@ class SchedulerSolver:
             self.jam_per_hari[hari] = sorted(self.slot[self.slot["Hari"] == hari]["Jam_Ke"].tolist())
             
         self.variables = {}
+        # List untuk menampung pinalti/biaya optimasi
+        self.penalties = []
         
     def run_solver(self, timeout_seconds=60.0):
         # 1. DEFINISI VARIABEL KEPUTUSAN
-        # var[g, r, m, h, j] = 1 jika Guru g, mengajar Rombel r, Mapel m, pada Hari h, Jam j.
         for _, row in self.mengajar.iterrows():
             g = row["ID_Guru"]
             r = row["ID_Rombel"]
@@ -41,9 +42,9 @@ class SchedulerSolver:
                         f"shift_g{g}_r{r}_m{m}_h{h}_j{j}"
                     )
                     
-        # 2. BATASAN DASAR (CONSTRAINTS)
+        # 2. BATASAN MUTLAK (HARD CONSTRAINTS) - Wajib Terpenuhi
         
-        # A. Total JP Mingguan Terpenuhi untuk Setiap Tugas Mengajar
+        # A. Total JP Mingguan Terpenuhi
         for _, row in self.mengajar.iterrows():
             g = row["ID_Guru"]
             r = row["ID_Rombel"]
@@ -80,10 +81,14 @@ class SchedulerSolver:
                         
                     self.model.Add(sum(guru_active_vars) <= 1)
 
-        # 3. 🛡️ BATASAN KUALITAS JADWAL (OPTIMASI MUTLAK)
+        # 3. 🎯 SOFT CONSTRAINTS & PENALTI (OPTIMASI FLEKSIBEL)
+        # Menghindari kegagalan pencarian solusi dengan memberikan penalti jika melanggar kualitas ideal.
 
-        # ATURAN 1: TIDAK BOLEH LONCAT-LONCAT (NO GAPS IN CLASS SCHEDULE)
-        # Menjamin jadwal kelas padat/rapat dari jam mulai hingga jam pulang sekolah di hari itu.
+        # Kata kunci mapel blok yang diprioritaskan rapat
+        kata_kunci_pjok = ["pjok", "olahraga", "jasmani", "penjas", "penjasorkes"]
+        kata_kunci_agama = ["agama", "islam", "kristen", "katolik", "hindu", "buddha", "konghucu"]
+        
+        # SOFT ATURAN 1: PENALTI UNTUK JAM KOSONG DI TENGAH (NO GAPS)
         for r in self.list_rombel:
             for h in self.list_hari:
                 jam_list = self.jam_per_hari[h]
@@ -91,94 +96,105 @@ class SchedulerSolver:
                 if n_jam <= 2:
                     continue
                 
-                # Variabel pembantu untuk mengetahui apakah kelas "sedang belajar" pada jam j
+                # Buat variabel apakah ada pelajaran di jam j
                 is_learning = {}
                 for j in jam_list:
                     active_vars = []
                     for _, row in self.mengajar[self.mengajar["ID_Rombel"] == r].iterrows():
                         active_vars.append(self.variables[(row["ID_Guru"], r, row["ID_Mapel"], h, j)])
-                    
-                    # is_learning[j] = 1 jika ada pelajaran di kelas r, hari h, jam j
                     is_learning[j] = self.model.NewBoolVar(f"learn_r{r}_h{h}_j{j}")
                     self.model.Add(sum(active_vars) == is_learning[j])
 
-                # Logika Rapat: Jika jam sebelum (j1) dan jam sesudah (j3) ada pelajaran,
-                # maka jam di tengahnya (j2) TIDAK BOLEH kosong (wajib ada pelajaran juga).
+                # Jika jam j1 ada, j3 ada, tapi j2 kosong -> berikan penalti tinggi (100)
                 for idx in range(n_jam - 2):
                     j1 = jam_list[idx]
                     j2 = jam_list[idx + 1]
                     j3 = jam_list[idx + 2]
                     
-                    # Rumus logika: is_learning[j1] + is_learning[j3] - is_learning[j2] <= 1
-                    # Jika j1=1 dan j3=1, maka j2 WAJIB bernilai 1 agar pertidaksamaan terpenuhi.
-                    self.model.Add(is_learning[j1] + is_learning[j3] - is_learning[j2] <= 1)
+                    gap_detected = self.model.NewBoolVar(f"gap_r{r}_h{h}_{j1}_{j2}_{j3}")
+                    # gap_detected aktif jika is_learning[j1] + is_learning[j3] - is_learning[j2] == 2 (yaitu j1=1, j3=1, j2=0)
+                    self.model.Add(is_learning[j1] + is_learning[j3] - is_learning[j2] <= 1 + gap_detected)
+                    
+                    # Tambah beban pinalti ke fungsi objektif
+                    self.penalties.append(gap_detected * 100)
 
-        # ATURAN 2: JAM MENGAJAR WAJIB BERURUTAN (CONSECUTIVE BLOCK HOURS)
-        # Jika guru mengajar >= 2 JP di kelas & hari yang sama (misal PJOK 3 JP), jamnya harus nempel/berurutan.
+        # SOFT ATURAN 2: PENALTI UNTUK MAPEL YANG TERPISAH (NOT CONSECUTIVE)
+        # Khusus untuk PJOK, Agama, atau mapel >= 2 JP dalam satu hari agar nempel berurutan.
         for _, row in self.mengajar.iterrows():
             g = row["ID_Guru"]
             r = row["ID_Rombel"]
             m = row["ID_Mapel"]
+            mapel_name = str(row["ID_Mapel"]).lower()
+            
+            # Berikan bobot penalti lebih besar untuk PJOK (500) dan Agama (400) agar diutamakan rapat
+            is_pjok = any(k in mapel_name for k in kata_kunci_pjok)
+            is_agama = any(k in mapel_name for k in kata_kunci_agama)
+            bobot_penalti = 1000 if is_pjok else (800 if is_agama else 150)
             
             for h in self.list_hari:
                 jam_list = self.jam_per_hari[h]
                 n_jam = len(jam_list)
+                if n_jam <= 2:
+                    continue
                 
-                # Buat variabel biner penanda apakah guru mengajar di hari tersebut
-                is_teaching_today = {}
-                for j in jam_list:
-                    is_teaching_today[j] = self.variables[(g, r, m, h, j)]
+                is_teaching_today = [self.variables[(g, r, m, h, j)] for j in jam_list]
                 
-                # Jumlah JP yang diajarkan hari ini
-                jp_hari_ini = self.model.NewIntVar(0, n_jam, f"jp_count_g{g}_r{r}_m{m}_h{h}")
-                self.model.Add(jp_hari_ini == sum(is_teaching_today[j] for j in jam_list))
-                
-                # Jika JP hari ini >= 2, maka jarak antara jam pertama mengajar dan jam terakhir mengajar
-                # harus sama dengan total JP mengajar dikurangi 1 (artinya rapat, tidak boleh ada jeda mapel lain).
-                first_jam_idx = self.model.NewIntVar(0, n_jam, f"first_g{g}_r{r}_m{m}_h{h}")
-                last_jam_idx = self.model.NewIntVar(0, n_jam, f"last_g{g}_r{r}_m{m}_h{h}")
-                
-                # Menggunakan trik formulasi rentang indeks jam
-                for idx, j in enumerate(jam_list):
-                    # Jika mengajar di jam j, maka first_jam_idx <= idx dan last_jam_idx >= idx
-                    self.model.Add(first_jam_idx <= idx).OnlyEnforceIf(is_teaching_today[j])
-                    self.model.Add(last_jam_idx >= idx).OnlyEnforceIf(is_teaching_today[j])
-                    
-                # Pembatasan: Rentang mengajar (last - first + 1) harus tepat sama dengan jumlah JP mengajar
-                # Hanya diberlakukan jika guru tersebut benar-benar mengajar di hari itu (jp_hari_ini >= 1)
-                is_active_today = self.model.NewBoolVar(f"active_today_g{g}_r{r}_m{m}_h{h}")
-                self.model.Add(jp_hari_ini >= 1).OnlyEnforceIf(is_active_today)
-                self.model.Add(jp_hari_ini == 0).OnlyEnforceIf(is_active_today.Not())
-                
-                self.model.Add(last_jam_idx - first_jam_idx + 1 == jp_hari_ini).OnlyEnforceIf(is_active_today)
+                # Deteksi jika ada 'lompatan' mengajar mapel yang sama oleh guru yang sama di hari yang sama
+                for idx1 in range(n_jam):
+                    for idx2 in range(idx1 + 2, n_jam):
+                        # Jika mengajar di jam idx1 dan idx2, tetapi di antaranya (idx1 + 1) tidak mengajar
+                        # Ini mengindikasikan adanya pemisahan/gap mengajar kelas yang sama
+                        for mid_idx in range(idx1 + 1, idx2):
+                            split_detected = self.model.NewBoolVar(f"split_g{g}_r{r}_m{m}_h{h}_{idx1}_{mid_idx}_{idx2}")
+                            # Aktif jika mengajar di idx1 dan idx2 tapi kosong di mid_idx
+                            self.model.Add(is_teaching_today[idx1] + is_teaching_today[idx2] - is_teaching_today[mid_idx] <= 1 + split_detected)
+                            self.penalties.append(split_detected * bobot_penalti)
 
-        # ATURAN 3: BATASI MAKSIMAL 3 HINGGA 4 MAPEL SEHARI PER KELAS
-        # Membantu siswa fokus dengan mengurangi variasi mata pelajaran harian.
+        # SOFT ATURAN 3: MAKSIMAL 4 MAPEL SEHARI
+        # Jika satu kelas belajar > 4 mapel dalam sehari, berikan penalti sedang (300) per kelebihan mapel.
         for r in self.list_rombel:
             for h in self.list_hari:
                 mapel_hari_ini_indicators = []
-                
-                # Cek setiap mapel yang diajarkan di kelas r
                 for _, row in self.mengajar[self.mengajar["ID_Rombel"] == r].iterrows():
                     g = row["ID_Guru"]
                     m = row["ID_Mapel"]
                     
-                    # Variabel penanda: 1 jika mapel m diajarkan oleh guru g di kelas r pada hari h
                     has_mapel_today = self.model.NewBoolVar(f"has_m{m}_g{g}_r{r}_h{h}")
-                    
-                    # Hubungkan penanda dengan jam belajar nyata:
-                    # has_mapel_today harus bernilai 1 jika setidaknya ada 1 jam pelajaran aktif
-                    self.model.AddMaxEquality(
-                        has_mapel_today, 
-                        [self.variables[(g, r, m, h, j)] for j in self.jam_per_hari[h]]
-                    )
+                    self.model.AddMaxEquality(has_mapel_today, [self.variables[(g, r, m, h, j)] for j in self.jam_per_hari[h]])
                     mapel_hari_ini_indicators.append(has_mapel_today)
                 
-                # Total mapel unik dalam sehari untuk kelas ini maksimal 4
                 if mapel_hari_ini_indicators:
-                    self.model.Add(sum(mapel_hari_ini_indicators) <= 4)
+                    total_mapel_today = self.model.NewIntVar(0, len(mapel_hari_ini_indicators), f"total_m_r{r}_h{h}")
+                    self.model.Add(total_mapel_today == sum(mapel_hari_ini_indicators))
+                    
+                    over_limit = self.model.NewIntVar(0, len(mapel_hari_ini_indicators), f"over_m_r{r}_h{h}")
+                    # over_limit = max(0, total_mapel_today - 4)
+                    self.model.Add(over_limit >= total_mapel_today - 4)
+                    self.model.Add(over_limit >= 0)
+                    
+                    self.penalties.append(over_limit * 300)
 
-        # 4. SOLVER EXECUTION
+        # SOFT ATURAN 4: PJOK HARUS DI JAM PAGI (JAM 1-3)
+        # Berikan penalti jika PJOK diletakkan di luar Jam 1, 2, atau 3.
+        for _, row in self.mengajar.iterrows():
+            g = row["ID_Guru"]
+            r = row["ID_Rombel"]
+            m = row["ID_Mapel"]
+            mapel_name = str(row["ID_Mapel"]).lower()
+            
+            if any(k in mapel_name for k in kata_kunci_pjok):
+                for h in self.list_hari:
+                    for idx, j in enumerate(self.jam_per_hari[h]):
+                        # Jam ke-1, 2, 3 biasanya berada di indeks 0, 1, 2. Jika indeks > 2 (artinya jam siang)
+                        if idx > 2:
+                            pjok_siang = self.variables[(g, r, m, h, j)]
+                            self.penalties.append(pjok_siang * 500) # Berikan pinalti 500 jika olahraga di siang hari
+
+        # 4. FUNGSI MINIMALISASI PENALTI (OBJECTIVE FUNCTION)
+        # AI akan meminimalkan total penalti, sehingga menghasilkan jadwal yang mendekati sempurna secara otomatis!
+        self.model.Minimize(sum(self.penalties))
+
+        # 5. SOLVER EXECUTION
         self.solver = cp_model.CpSolver()
         self.solver.parameters.max_time_in_seconds = timeout_seconds
         self.solver.parameters.num_search_workers = 8  # Maksimalkan multi-threading core CPU
