@@ -10,8 +10,7 @@ import sys
 
 
 # ==========================================================
-# FIX IMPORT PATH
-# Agar scheduler.py dan database.py terbaca
+# ROOT PATH PROJECT
 # ==========================================================
 
 ROOT_DIR = os.path.abspath(
@@ -25,32 +24,31 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 
+
 # ==========================================================
-# IMPORT MODULE PROJECT
+# IMPORT MODULE
 # ==========================================================
 
 try:
 
     from database import load_database
-    from scheduler import Scheduler
+
+    # PERBAIKAN UTAMA
+    from scheduler_engine import Scheduler
 
 
-except ModuleNotFoundError as e:
+except Exception as e:
 
     st.error(
-        "❌ Modul program tidak ditemukan."
+        "❌ Modul Scheduler tidak ditemukan."
     )
 
     st.write(
-        "Folder project yang dibaca:"
+        "Folder project:"
     )
 
     st.code(ROOT_DIR)
 
-
-    st.write(
-        "Isi folder project:"
-    )
 
     st.write(
         os.listdir(ROOT_DIR)
@@ -74,6 +72,7 @@ st.set_page_config(
 )
 
 
+
 # ==========================================================
 # HEADER
 # ==========================================================
@@ -91,7 +90,7 @@ st.divider()
 
 
 # ==========================================================
-# LOAD DATABASE EXCEL
+# LOAD DATABASE
 # ==========================================================
 
 try:
@@ -112,7 +111,7 @@ except Exception as e:
 
 
 # ==========================================================
-# VALIDASI TABLE
+# CEK TABLE EXCEL
 # ==========================================================
 
 required_tables = [
@@ -137,15 +136,14 @@ missing = [
 if missing:
 
     st.error(
-        "Tabel berikut belum tersedia: "
-        + ", ".join(missing)
+        "Tabel tidak ditemukan: "
+        +
+        ", ".join(missing)
     )
 
     st.stop()
 
 
-
-# Ambil tabel
 
 guru = db["Guru"]
 
@@ -160,7 +158,7 @@ hari_jam = db["Hari_Jam"]
 
 
 # ==========================================================
-# DASHBOARD
+# STATISTIK
 # ==========================================================
 
 st.subheader(
@@ -190,13 +188,13 @@ c3.metric(
 
 
 c4.metric(
-    "Mengajar",
+    "Guru Mengajar",
     len(mengajar)
 )
 
 
 c5.metric(
-    "Hari/Jam",
+    "Slot Hari/Jam",
     len(hari_jam)
 )
 
@@ -215,7 +213,7 @@ with st.expander(
 ):
 
 
-    tab1,tab2,tab3,tab4,tab5 = st.tabs(
+    t1,t2,t3,t4,t5 = st.tabs(
         [
             "Guru",
             "Guru Mengajar",
@@ -226,40 +224,35 @@ with st.expander(
     )
 
 
-    with tab1:
-
+    with t1:
         st.dataframe(
             guru,
             use_container_width=True
         )
 
 
-    with tab2:
-
+    with t2:
         st.dataframe(
             mengajar,
             use_container_width=True
         )
 
 
-    with tab3:
-
+    with t3:
         st.dataframe(
             rombel,
             use_container_width=True
         )
 
 
-    with tab4:
-
+    with t4:
         st.dataframe(
             mapel,
             use_container_width=True
         )
 
 
-    with tab5:
-
+    with t5:
         st.dataframe(
             hari_jam,
             use_container_width=True
@@ -272,7 +265,7 @@ st.divider()
 
 
 # ==========================================================
-# SESSION STATE
+# SESSION
 # ==========================================================
 
 if "jadwal" not in st.session_state:
@@ -287,32 +280,24 @@ if "scheduler" not in st.session_state:
 
 
 
+
 # ==========================================================
 # BUTTON GENERATE
 # ==========================================================
 
 generate = st.button(
-
     "🚀 Generate Jadwal",
-
     type="primary",
-
     use_container_width=True
-
 )
 
 
 
 # ==========================================================
-# RUN AI SOLVER
+# GENERATE PROCESS
 # ==========================================================
 
 if generate:
-
-
-    st.subheader(
-        "🤖 AI Scheduler Progress"
-    )
 
 
     progress = st.progress(0)
@@ -320,13 +305,8 @@ if generate:
     status = st.empty()
 
 
-
     try:
 
-
-        # ----------------------------------
-        # INIT ENGINE
-        # ----------------------------------
 
         status.info(
             "Membuat Scheduler Engine..."
@@ -339,29 +319,23 @@ if generate:
         st.session_state.scheduler = scheduler
 
 
-        progress.progress(15)
+        progress.progress(20)
 
 
-
-        # ----------------------------------
-        # PREPARE ENGINE
-        # ----------------------------------
 
         status.info(
-            "Mempersiapkan slot pembelajaran..."
+            "Menyiapkan data scheduler..."
         )
 
 
         scheduler.prepare_engine()
 
 
-        progress.progress(35)
+        progress.progress(40)
 
 
 
-        # ----------------------------------
         # AUDIT KAPASITAS
-        # ----------------------------------
 
         total_jp = int(
             scheduler.mengajar[
@@ -386,21 +360,20 @@ if generate:
         )
 
 
-
         st.info(
 f"""
 ### 📋 Audit Kapasitas
 
-Total JP kebutuhan:
-**{total_jp} JP**
+Total JP:
+**{total_jp}**
 
-Jumlah kelas:
+Total Kelas:
 **{total_kelas}**
 
-Jumlah slot:
+Total Slot:
 **{total_slot}**
 
-Kapasitas maksimal:
+Kapasitas:
 **{kapasitas} JP**
 """
         )
@@ -411,41 +384,23 @@ Kapasitas maksimal:
 
 
             st.error(
-                f"""
-🚨 Kapasitas tidak mencukupi.
-
-Kebutuhan:
-{total_jp} JP
-
-Kapasitas:
-{kapasitas} JP
-
-Kurangi:
-{total_jp-kapasitas} JP
-"""
+                "❌ JP melebihi kapasitas jadwal."
             )
-
-
-            progress.progress(100)
 
             st.stop()
 
 
 
-        progress.progress(50)
+        progress.progress(60)
 
 
-
-        # ----------------------------------
-        # SOLVER
-        # ----------------------------------
 
         status.info(
             "Menjalankan AI Solver CP-SAT..."
         )
 
 
-        sukses = scheduler.solve(
+        hasil = scheduler.solve(
             timeout_seconds=60
         )
 
@@ -454,7 +409,7 @@ Kurangi:
 
 
 
-        if sukses:
+        if hasil:
 
 
             st.session_state.jadwal = (
@@ -465,11 +420,6 @@ Kurangi:
             progress.progress(100)
 
 
-            status.success(
-                "AI berhasil membuat jadwal"
-            )
-
-
             st.success(
                 "🎉 Jadwal berhasil dibuat!"
             )
@@ -477,14 +427,9 @@ Kurangi:
 
         else:
 
-
-            progress.progress(100)
-
-
             st.error(
                 "AI tidak menemukan solusi."
             )
-
 
 
 
@@ -492,23 +437,23 @@ Kurangi:
 
 
         st.error(
-            "Terjadi error saat generate jadwal."
+            "Error saat generate jadwal."
         )
-
 
         st.exception(e)
 
 
 
+
 # ==========================================================
-# OUTPUT
+# HASIL JADWAL
 # ==========================================================
 
 if not st.session_state.jadwal.empty:
 
 
     st.subheader(
-        "🗓️ Hasil Jadwal Generasi AI"
+        "🗓️ Hasil Jadwal AI"
     )
 
 
@@ -522,20 +467,19 @@ if not st.session_state.jadwal.empty:
     try:
 
 
-        excel_data = (
+        excel = (
             st.session_state.scheduler.export()
         )
 
 
-        if excel_data:
+        if excel:
 
 
             st.download_button(
 
-                label=
-                "📥 Unduh Jadwal Excel",
+                label="📥 Download Excel",
 
-                data=excel_data,
+                data=excel,
 
                 file_name=
                 "Jadwal_Sekolah_AI_V2.xlsx",
@@ -548,13 +492,11 @@ if not st.session_state.jadwal.empty:
             )
 
 
-
     except Exception as e:
 
 
         st.warning(
             "Export Excel gagal."
         )
-
 
         st.exception(e)
