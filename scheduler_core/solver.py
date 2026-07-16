@@ -212,36 +212,34 @@ class SchedulerSolver:
                     self.model.Add(is_learning[j1] + is_learning[j3] - is_learning[j2] <= 1)
 
         # =========================================================================
-        # 5. SOFT CONSTRAINTS (PENALTI KUALITAS LAINNYA)
+        # 5. SOFT CONSTRAINTS (PENALTI KUALITAS) & HARD TIME CONSTRAINTS
         # =========================================================================
         
-        # --- ATURAN A: Mapel Prioritas Pagi (Wajib di Jam Ke-1 s/d Jam Ke-4) ---
-        # NOTE: Sesuaikan nama mapel di bawah ini dengan nama di database Anda
-        MAPEL_PRIORITAS_PAGI = ["MAT", "PJOK", "Matematika", "Penyas"] 
-        
+        # --- 🚫 BATASAN MUTLAK (HARD CONSTRAINT): PJOK Hanya Boleh di Jam 1, 2, 3 ---
+        # NOTE: Sesuaikan nama mapel olahraga Anda di list di bawah ini
+        MAPEL_PJOK = ["PJOK", "Penyas"]
         for (g, r, m, h, j), var in self.variables.items():
-            # Jika ditaruh di jam ke-5 atau lebih tinggi (jam siang)
-            if m in MAPEL_PRIORITAS_PAGI and j >= 5:
-                self.penalties.append(var * 7000) # Denda jika ditaruh siang
+            if m in MAPEL_PJOK:
+                # Jika jam mengajar (j) di atas jam 3 (yaitu jam 4, 5, 6, dst)
+                if j > 3:
+                    # Kunci variabel menjadi 0 (Dilarang keras dijadwalkan!)
+                    self.model.Add(var == 0)
 
-        # --- ATURAN B: PJOK Dilarang Keras di Jam Terakhir ---
-        for h in self.list_hari:
-            if self.jam_per_hari[h]:
-                jam_terakhir = max(self.jam_per_hari[h])
-                for (g, r, m, h_var, j_var), var in self.variables.items():
-                    if m in ["PJOK", "Penyas"] and h_var == h and j_var == jam_terakhir:
-                        self.penalties.append(var * 15000) # Denda mati/sangat ekstrem
+        # --- 🎯 PENALTI: Matematika Diupayakan di Jam Pagi (Jam 1 - 4) ---
+        MAPEL_MATEMATIKA = ["MAT", "Matematika"]
+        for (g, r, m, h, j), var in self.variables.items():
+            # Jika Matematika ditaruh di jam ke-5 atau lebih siang
+            if m in MAPEL_MATEMATIKA and j >= 5:
+                self.penalties.append(var * 8000) # Penalti tinggi agar AI menaruhnya di pagi
 
-        # --- ATURAN C: Mapel Siang/Muatan Lokal (Prakarya & Bahasa Jawa) ---
-        # NOTE: Sesuaikan nama mapel di bawah ini dengan nama di database Anda
+        # --- 🎯 PENALTI: Mapel Siang/Muatan Lokal (Prakarya & Bahasa Jawa) ---
         MAPEL_PRIORITAS_SIANG = ["Prakarya", "PRK", "Bahasa Jawa", "B_Jawa", "BJAW", "SBK", "Seni Budaya"]
-        
         for (g, r, m, h, j), var in self.variables.items():
-            # Jika ditaruh di jam ke-1 sampai jam ke-4 (jam pagi)
+            # Jika mapel santai ditaruh di jam pagi (jam ke-1 s/d jam ke-4)
             if m in MAPEL_PRIORITAS_SIANG and j <= 4:
-                self.penalties.append(var * 6000) # Denda jika ditaruh pagi
+                self.penalties.append(var * 6000) # Beri denda agar digeser ke siang
 
-        # --- ATURAN D: Insentif Tambahan untuk Prakarya & B. Jawa di Jam Paling Akhir ---
+        # --- 🎯 INSENTIF: Menempelkan Prakarya & B. Jawa di Jam Paling Akhir ---
         for h in self.list_hari:
             if self.jam_per_hari[h]:
                 jam_terakhir_list = sorted(self.jam_per_hari[h])[-2:] # Ambil 2 jam terakhir di hari tersebut
@@ -250,7 +248,7 @@ class SchedulerSolver:
                     if m in MAPEL_PRIORITAS_SIANG and h_var == h and j_var not in jam_terakhir_list:
                         self.penalties.append(var * 1500)
 
-        # --- ATURAN E: Batasi Maksimal 4 Mapel Sehari per Kelas ---
+        # --- 🎯 PENALTI: Batasi Maksimal 4 Mapel Sehari per Kelas ---
         for r in self.list_rombel:
             for h in self.list_hari:
                 mapel_hari_ini_indicators = []
