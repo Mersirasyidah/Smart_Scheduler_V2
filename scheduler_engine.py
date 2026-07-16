@@ -61,25 +61,40 @@ class Scheduler:
         if self.df_hasil.empty:
             return None
         
-        # DENORMALISASI KHUSUS UNTUK EXPORTER:
-        # Kembalikan semua nama kolom ke format asli dengan spasi ("Jam Ke", "ID Guru", dll.)
-        # agar sesuai dengan ekspektasi exporter.py bawaan Anda.
+        # JALUR KOMPATIBILITAS GANDA:
+        # Kita buat data hasil memiliki versi UNDERSCORE dan SPASI sekaligus!
         df_export = self.df_hasil.copy()
         
-        rename_map = {
-            "ID_Guru": "ID Guru",
-            "Nama_Guru": "Nama Guru",
-            "ID_Rombel": "Kelas",
-            "ID_Mapel": "Mapel",
-            "Jam_Ke": "Jam Ke"
+        # Sediakan kolom 'ID_Guru' (untuk merge) & 'ID Guru' (jika dibutuhkan)
+        if "ID_Guru" in df_export.columns:
+            df_export["ID Guru"] = df_export["ID_Guru"]
+        elif "ID Guru" in df_export.columns:
+            df_export["ID_Guru"] = df_export["ID Guru"]
+            
+        # Sediakan kolom 'Jam_Ke' (untuk merge) & 'Jam Ke' (untuk pivot)
+        if "Jam_Ke" in df_export.columns:
+            df_export["Jam Ke"] = df_export["Jam_Ke"]
+        elif "Jam Ke" in df_export.columns:
+            df_export["Jam_Ke"] = df_export["Jam Ke"]
+            
+        # Duplikat database khusus untuk exporter dengan skema kolom ganda
+        exporter_guru = self.guru.copy()
+        if "ID_Guru" in exporter_guru.columns:
+            exporter_guru["ID Guru"] = exporter_guru["ID_Guru"]
+        if "Nama_Guru" in exporter_guru.columns:
+            exporter_guru["Nama Guru"] = exporter_guru["Nama_Guru"]
+            
+        exporter_rombel = self.rombel.copy()
+        if "ID_Rombel" in exporter_rombel.columns:
+            exporter_rombel["Kelas"] = exporter_rombel["ID_Rombel"]
+            
+        clean_db = {
+            "Guru": exporter_guru,
+            "Guru_Mengajar": self.mengajar,
+            "Rombel": exporter_rombel,
+            "Mapel": self.mapel,
+            "Hari_Jam": self.hari_jam
         }
         
-        # Ganti nama kolom yang ada di df_export jika kolom tersebut eksis
-        df_export = df_export.rename(columns={k: v for k, v in rename_map.items() if k in df_export.columns})
-        
-        # Tambahkan kolom "Jam Ke" jika exporter membutuhkannya secara spesifik dari "Jam"
-        if "Jam Ke" not in df_export.columns and "Jam" in df_export.columns:
-            df_export["Jam Ke"] = df_export["Jam"]
-            
-        exporter = ScheduleExporter(df_export, self.db)
+        exporter = ScheduleExporter(df_export, clean_db)
         return exporter.generate_excel()
