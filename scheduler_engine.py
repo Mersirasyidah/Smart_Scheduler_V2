@@ -59,117 +59,30 @@ class Scheduler:
 
     def optimize_schedule_quality(self, df):
         """
-        Fungsi Post-Processing untuk menyempurnakan kualitas jadwal:
-        1. Menyatukan total jam mengajar guru mapel Blok (PJOK & Agama) agar langsung 3 JP berurutan penuh.
-        2. Memastikan PJOK diletakkan di jam paling pagi (Jam 1, 2, 3).
-        3. Menyatukan jam mengajar guru mapel non-blok lainnya agar tetap berurutan di hari yang sama.
+        Fungsi pengurutan tampilan jadwal:
+        Mengurutkan hasil agar lebih rapi saat dibaca di Excel tanpa mengubah 
+        kombinasi Hari & Jam asli dari solver untuk mencegah bentrok/duplikasi.
         """
         if df.empty:
             return df
 
         df_opt = df.copy()
         
-        # Deteksi kolom nama mapel yang sesungguhnya
-        mapel_col = "Mapel" if "Mapel" in df_opt.columns else ("ID_Mapel" if "ID_Mapel" in df_opt.columns else None)
-        if not mapel_col:
-            return df_opt
-
-        # Tentukan kolom kelas (menggunakan string tunggal agar aman di groupby)
+        # Pastikan kolom-kolom penting tersedia
         kelas_col = "ID_Rombel" if "ID_Rombel" in df_opt.columns else ("Kelas" if "Kelas" in df_opt.columns else None)
         if not kelas_col:
             return df_opt
 
-        # Kata kunci kategori mapel wajib Blok & Prioritas Pagi
-        kata_kunci_pjok = ["pjok", "olahraga", "jasmani", "penjas", "penjasorkes"]
-        kata_kunci_agama = ["agama", "islam", "kristen", "katolik", "hindu", "buddha", "konghucu"]
-        kata_kunci_blok = kata_kunci_pjok + kata_kunci_agama
-
-        # FASE 1: Tarik seluruh pecahan jadwal PJOK / Agama ke dalam satu hari yang sama agar tidak terpencar beda hari
-        # Kita lakukan pengecekan per Rombel/Kelas terlebih dahulu
-        df_clean_days = []
-        for kelas, group_kelas in df_opt.groupby(kelas_col):
-            # Temukan mapel blok yang tersebar di kelas ini
-            is_blok_mask = group_kelas[mapel_col].astype(str).str.lower().apply(
-                lambda x: any(kunci in x for kunci in kata_kunci_blok)
-            )
-            
-            df_blok = group_kelas[is_blok_mask].copy()
-            df_biasa = group_kelas[~is_blok_mask].copy()
-
-            if not df_blok.empty:
-                # Satukan semua jam mapel blok yang sama ke hari pertama kemunculannya agar terkonsentrasi langsung 3 JP
-                for mapel_name, mapel_group in df_blok.groupby(mapel_col):
-                    hari_target = mapel_group["Hari"].iloc[0] # Pilih hari pertama
-                    df_blok.loc[df_blok[mapel_col] == mapel_name, "Hari"] = hari_target
-            
-            df_clean_days.append(pd.concat([df_blok, df_biasa], ignore_index=True))
-            
-        df_opt = pd.concat(df_clean_days, ignore_index=True)
-
-        # FASE 2: Urutkan susunan jam mengajar di setiap hari agar berurutan (Blok rapat & PJOK paling pagi)
-        df_hasil_final = []
-
-        # Iterasi menggunakan kolom kelas dan Hari
-        for (kelas, hari), sub_df in df_opt.groupby([kelas_col, "Hari"]):
-            # Urutkan berdasarkan Jam_Ke yang asli
-            sub_df = sub_df.sort_values(by="Jam_Ke").reset_index(drop=True)
-            
-            # Klasifikasi baris berdasarkan jenis mata pelajaran
-            is_pjok = sub_df[mapel_col].astype(str).str.lower().apply(
-                lambda x: any(kunci in x for kunci in kata_kunci_pjok)
-            )
-            is_agama = sub_df[mapel_col].astype(str).str.lower().apply(
-                lambda x: any(kunci in x for kunci in kata_kunci_agama)
-            )
-            is_blok = is_pjok | is_agama
-            
-            df_pjok = sub_df[is_pjok].copy()
-            df_agama = sub_df[is_agama].copy()
-            df_lain = sub_df[~is_blok].copy()
-            
-            # Gabungkan dengan prioritas urutan: 
-            # 1. PJOK (paling pagi / atas)
-            # 2. Agama (Blok berikutnya)
-            # 3. Mata pelajaran biasa
-            sub_df_sorted = pd.concat([df_pjok, df_agama, df_lain], ignore_index=True)
-            
-            # Pastikan guru non-blok yang tersisa juga berkumpul jam mengajarnya secara berurutan
-            guru_col = "ID_Guru" if "ID_Guru" in sub_df_sorted.columns else ("ID Guru" if "ID Guru" in sub_df_sorted.columns else None)
-            if guru_col:
-                # Beri label urutan prioritas agar sorting guru biasa tidak merusak struktur blok PJOK & Agama di atas
-                def tentukan_prioritas_tipe(row):
-                    nama_mapel = str(row[mapel_col]).lower()
-                    if any(k in nama_mapel for k in kata_kunci_pjok):
-                        return 0 # PJOK paling atas
-                    elif any(k in nama_mapel for k in kata_kunci_agama):
-                        return 1 # Agama kedua
-                    return 2 # Guru biasa berkumpul di bawah
-                
-                sub_df_sorted['tipe_sort'] = sub_df_sorted.apply(tentukan_prioritas_tipe, axis=1)
-                
-                # Urutkan berdasarkan tipe prioritas terlebih dahulu, lalu kelompokkan guru yang sama
-                sub_df_sorted = sub_df_sorted.sort_values(
-                    by=['tipe_sort', guru_col], 
-                    ascending=[True, True]
-                ).reset_index(drop=True)
-                sub_df_sorted = sub_df_sorted.drop(columns=['tipe_sort'], errors='ignore')
-
-            # Kembalikan penomoran Jam_Ke asli agar urutan jam sekolah tetap valid dan tidak bolong
-            sub_df_sorted["Jam_Ke"] = sub_df["Jam_Ke"].values
-            if "Jam" in sub_df_sorted.columns:
-                sub_df_sorted["Jam"] = sub_df["Jam"].values
-            if "Jam Ke" in sub_df_sorted.columns:
-                sub_df_sorted["Jam Ke"] = sub_df["Jam Ke"].values
-                
-            df_hasil_final.append(sub_df_sorted)
-
-        return pd.concat(df_hasil_final, ignore_index=True) if df_hasil_final else df_opt
+        # Urutkan secara logis: berdasarkan Kelas -> Hari -> Jam Ke
+        # Ini adalah urutan standar yang paling aman dan tidak merusak struktur data asli
+        df_opt = df_opt.sort_values(by=[kelas_col, "Hari", "Jam_Ke"]).reset_index(drop=True)
+        return df_opt
 
     def export(self):
         if self.df_hasil.empty:
             return None
         
-        # Lakukan Optimasi Kualitas Jadwal (Urutan Jam Guru, Blok Agama/PJOK & Prioritas PJOK Pagi)
+        # Urutkan secara aman
         df_optimized = self.optimize_schedule_quality(self.df_hasil)
         
         # JALUR KOMPATIBILITAS GANDA EXPORT:
