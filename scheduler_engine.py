@@ -62,23 +62,28 @@ class Scheduler:
             return None
         
         # JALUR KOMPATIBILITAS GANDA:
-        # Kita buat data hasil memiliki versi UNDERSCORE dan SPASI sekaligus!
         df_export = self.df_hasil.copy()
         
-        # Sediakan kolom 'ID_Guru' (untuk merge) & 'ID Guru' (jika dibutuhkan)
         if "ID_Guru" in df_export.columns:
             df_export["ID Guru"] = df_export["ID_Guru"]
         elif "ID Guru" in df_export.columns:
             df_export["ID_Guru"] = df_export["ID Guru"]
             
-        # Sediakan kolom 'Jam_Ke' (untuk merge) & 'Jam Ke' (untuk pivot)
         if "Jam_Ke" in df_export.columns:
             df_export["Jam Ke"] = df_export["Jam_Ke"]
         elif "Jam Ke" in df_export.columns:
             df_export["Jam_Ke"] = df_export["Jam Ke"]
             
-        # Duplikat database khusus untuk exporter dengan skema kolom ganda
+        # Duplikat data guru khusus untuk exporter
         exporter_guru = self.guru.copy()
+        
+        # PERBAIKAN UTAMA: Hapus duplikasi ID Guru (misalnya guru G26 yang punya 2 jadwal MGMP) 
+        # agar tidak melipatgandakan baris saat proses .merge() di exporter
+        if "ID_Guru" in exporter_guru.columns:
+            exporter_guru = exporter_guru.drop_duplicates(subset=["ID_Guru"], keep="first")
+        elif "ID Guru" in exporter_guru.columns:
+            exporter_guru = exporter_guru.drop_duplicates(subset=["ID Guru"], keep="first")
+            
         if "ID_Guru" in exporter_guru.columns:
             exporter_guru["ID Guru"] = exporter_guru["ID_Guru"]
         if "Nama_Guru" in exporter_guru.columns:
