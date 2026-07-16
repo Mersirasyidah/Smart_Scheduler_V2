@@ -6,11 +6,22 @@ from scheduler_core.exporter import ScheduleExporter
 class Scheduler:
     def __init__(self, db):
         self.db = db
-        self.guru = db["Guru"]
-        self.mengajar = db["Guru_Mengajar"]
-        self.rombel = db["Rombel"]
-        self.mapel = db["Mapel"]
-        self.hari_jam = db["Hari_Jam"]
+        
+        # NORMALISASI: Mengubah nama kolom yang memiliki spasi menjadi underscore
+        self.guru = db["Guru"].copy()
+        self.guru.columns = [c.replace(" ", "_") for c in self.guru.columns]
+        
+        self.mengajar = db["Guru_Mengajar"].copy()
+        self.mengajar.columns = [c.replace(" ", "_") for c in self.mengajar.columns]
+        
+        self.rombel = db["Rombel"].copy()
+        self.rombel.columns = [c.replace(" ", "_") for c in self.rombel.columns]
+        
+        self.mapel = db["Mapel"].copy()
+        self.mapel.columns = [c.replace(" ", "_") for c in self.mapel.columns]
+        
+        self.hari_jam = db["Hari_Jam"].copy()
+        self.hari_jam.columns = [c.replace(" ", "_") for c in self.hari_jam.columns]
         
         self.col_jp = "JP"
         self.solver_engine = None
