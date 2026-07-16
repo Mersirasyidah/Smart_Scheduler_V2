@@ -76,15 +76,15 @@ class Scheduler:
         # Definisikan kata kunci olahraga / PJOK
         kata_kunci_pjok = ["pjok", "olahraga", "jasmani", "penjas", "penjasorkes"]
 
-        # Proses per-Kelas dan per-Hari agar jadwal tidak saling merusak batas kelas lain
-        grup_kolom = ["ID_Rombel"] if "ID_Rombel" in df_opt.columns else ("Kelas" if "Kelas" in df_opt.columns else [])
-        if not grup_kolom:
+        # Tentukan kolom kelas (menggunakan string tunggal agar aman di groupby)
+        kelas_col = "ID_Rombel" if "ID_Rombel" in df_opt.columns else ("Kelas" if "Kelas" in df_opt.columns else None)
+        if not kelas_col:
             return df_opt
 
         df_hasil_final = []
 
-        # Iterasi per kelas dan per hari untuk merestrukturisasi urutan jam belajar
-        for (kelas, hari), sub_df in df_opt.groupby([grup_kolom, "Hari"]):
+        # Iterasi menggunakan kolom kelas (string) dan Hari (string) ke dalam satu list datar
+        for (kelas, hari), sub_df in df_opt.groupby([kelas_col, "Hari"]):
             # Urutkan berdasarkan Jam_Ke yang asli
             sub_df = sub_df.sort_values(by="Jam_Ke").reset_index(drop=True)
             
@@ -99,12 +99,13 @@ class Scheduler:
             # Satukan kembali dengan PJOK berada di paling atas (pagi hari)
             sub_df_sorted = pd.concat([df_pjok, df_lain], ignore_index=True)
             
-            # Mengelompokkan guru yang sama agar jam mengajarnya berurutan setelah pergeseran PJOK
-            # Kita urutkan berdasarkan Nama Guru / ID Guru agar jam mereka yang sama saling berdampingan
+            # Mengelompokkan guru yang sama agar jam mengajarnya berurutan
             guru_col = "ID_Guru" if "ID_Guru" in sub_df_sorted.columns else ("ID Guru" if "ID Guru" in sub_df_sorted.columns else None)
             if guru_col:
-                # PJOK tetap dipertahankan di paling atas, sisanya diurutkan agar guru yang sama berkumpul jamnya
-                sub_df_sorted['is_pjok_sort'] = is_pjok
+                # Tandai baris mana yang PJOK untuk dipertahankan di paling atas saat diurutkan
+                sub_df_sorted['is_pjok_sort'] = sub_df_sorted[mapel_col].astype(str).str.lower().apply(
+                    lambda x: any(kunci in x for kunci in kata_kunci_pjok)
+                )
                 sub_df_sorted = sub_df_sorted.sort_values(
                     by=['is_pjok_sort', guru_col], 
                     ascending=[False, True]
@@ -112,7 +113,6 @@ class Scheduler:
                 sub_df_sorted = sub_df_sorted.drop(columns=['is_pjok_sort'], errors='ignore')
 
             # Kembalikan alokasi nilai Jam_Ke asli yang berurutan ke struktur baris baru
-            # Ini menjamin tidak ada jam bolong atau nomor jam yang rusak/hilang
             sub_df_sorted["Jam_Ke"] = sub_df["Jam_Ke"].values
             if "Jam" in sub_df_sorted.columns:
                 sub_df_sorted["Jam"] = sub_df["Jam"].values
