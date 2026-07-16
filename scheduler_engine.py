@@ -39,7 +39,7 @@ class Scheduler:
         # 5. Normalisasi Kolom HARI_JAM
         self.hari_jam = db["Hari_Jam"].copy()
         self.hari_jam.columns = [c.replace(" ", "_") for c in self.hari_jam.columns]
-        # PERBAIKAN UTAMA: Petakan kolom 'Jam' menjadi 'Jam_Ke' agar dibaca lancar oleh Solver
+        # Petakan kolom 'Jam' menjadi 'Jam_Ke' agar dibaca lancar oleh Solver
         if "Jam" in self.hari_jam.columns:
             self.hari_jam["Jam_Ke"] = self.hari_jam["Jam"]
         
@@ -64,5 +64,15 @@ class Scheduler:
     def export(self):
         if self.df_hasil.empty:
             return None
-        exporter = ScheduleExporter(self.df_hasil, self.db)
+        
+        # PERBAIKAN UTAMA: Buat duplikat database sementara dengan tabel-tabel yang sudah bersih/dinormalisasi
+        clean_db = {
+            "Guru": self.guru,
+            "Guru_Mengajar": self.mengajar,
+            "Rombel": self.rombel,
+            "Mapel": self.mapel,
+            "Hari_Jam": self.hari_jam
+        }
+        
+        exporter = ScheduleExporter(self.df_hasil, clean_db)
         return exporter.generate_excel()
