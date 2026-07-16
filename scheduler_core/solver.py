@@ -89,10 +89,10 @@ class SchedulerSolver:
                         guru_active_vars.append(self.variables[(g, r, m, h, j)])
                     self.model.Add(sum(guru_active_vars) <= 1)
 
-        # ==========================================
-        # 3. 🎯 ATURAN PENBAGIAN JP HARIAN & HARI AKTIF (SOFT CONSTRAINTS DENGAN PENALTI TINGGI)
-        # ==========================================
-        # Kita menggunakan variabel penyimpangan (deviation) untuk menghitung pinalti jika pola tidak sesuai target.
+        # =========================================================================
+        # 3. ATURAN PEMBAGIAN JP HARIAN & HARI AKTIF (SOFT CONSTRAINTS PENALTI TINGGI)
+        # =========================================================================
+        # Menggunakan variabel penyimpangan (deviation) agar AI tidak mogok/infeasible
         for _, row in self.mengajar.iterrows():
             g = row["ID_Guru"]
             r = row["ID_Rombel"]
@@ -121,21 +121,16 @@ class SchedulerSolver:
                 
                 # --- POLA TARGET 6 JP (Wajib 2, 2, 2) ---
                 if target_jp == 6:
-                    # Jika aktif, jp_hari_ini idealnya harus = 2
                     jp_diff = self.model.NewIntVar(-6, 6, f"jp_diff_g{g}_r{r}_m{m}_h{h}")
                     self.model.Add(jp_hari_ini - 2 == jp_diff).OnlyEnforceIf(is_active)
                     
-                    # Ambil nilai mutlak dari jp_diff
                     abs_diff = self.model.NewIntVar(0, 6, f"abs_diff_g{g}_r{r}_m{m}_h{h}")
                     self.model.Add(abs_diff >= jp_diff)
                     self.model.Add(abs_diff >= -jp_diff)
-                    
-                    # Berikan pinalti jika jp_hari_ini bukan 2 (Pinalti: 5.000)
                     self.penalties.append(abs_diff * 5000)
                 
                 # --- POLA TARGET 5 JP (Wajib 2, 2, 1) ---
                 elif target_jp == 5:
-                    # jp_hari_ini tidak boleh lebih dari 2 JP dalam sehari
                     over_2 = self.model.NewIntVar(0, 5, f"over_2_g{g}_r{r}_m{m}_h{h}")
                     self.model.Add(over_2 >= jp_hari_ini - 2)
                     self.model.Add(over_2 >= 0)
@@ -171,9 +166,9 @@ class SchedulerSolver:
                     self.model.Add(abs_diff >= -jp_diff)
                     self.penalties.append(abs_diff * 5000)
 
-        # ==========================================
-        # 4. 🛡️ ATURAN STRUKTUR JAM BERURUTAN & TIDAK LONCAT-LONCAT (HARD CONSTRAINTS)
-        # ==========================================
+        # =========================================================================
+        # 4. BATASAN STRUKTUR JAM BERURUTAN & TIDAK LONCAT-LONCAT (HARD CONSTRAINTS)
+        # =========================================================================
         
         # A. Wajib Berurutan (Consecutive Block Hours)
         for _, row in self.mengajar.iterrows():
@@ -216,11 +211,46 @@ class SchedulerSolver:
                     j3 = jam_list[idx + 2]
                     self.model.Add(is_learning[j1] + is_learning[j3] - is_learning[j2] <= 1)
 
-        # ==========================================
-        # 5. 📉 SOFT CONSTRAINTS (PENALTI KUALITAS LAINNYA)
-        # ==========================================
+        # =========================================================================
+        # 5. SOFT CONSTRAINTS (PENALTI KUALITAS LAINNYA)
+        # =========================================================================
         
-        # Batasi Maksimal 4 Mapel Sehari per Kelas
+        # --- ATURAN A: Mapel Prioritas Pagi (Wajib di Jam Ke-1 s/d Jam Ke-4) ---
+        # NOTE: Sesuaikan nama mapel di bawah ini dengan nama di database Anda
+        MAPEL_PRIORITAS_PAGI = ["MAT", "PJOK", "Matematika", "Penyas"] 
+        
+        for (g, r, m, h, j), var in self.variables.items():
+            # Jika ditaruh di jam ke-5 atau lebih tinggi (jam siang)
+            if m in MAPEL_PRIORITAS_PAGI and j >= 5:
+                self.penalties.append(var * 7000) # Denda jika ditaruh siang
+
+        # --- ATURAN B: PJOK Dilarang Keras di Jam Terakhir ---
+        for h in self.list_hari:
+            if self.jam_per_hari[h]:
+                jam_terakhir = max(self.jam_per_hari[h])
+                for (g, r, m, h_var, j_var), var in self.variables.items():
+                    if m in ["PJOK", "Penyas"] and h_var == h and j_var == jam_terakhir:
+                        self.penalties.append(var * 15000) # Denda mati/sangat ekstrem
+
+        # --- ATURAN C: Mapel Siang/Muatan Lokal (Prakarya & Bahasa Jawa) ---
+        # NOTE: Sesuaikan nama mapel di bawah ini dengan nama di database Anda
+        MAPEL_PRIORITAS_SIANG = ["Prakarya", "PRK", "Bahasa Jawa", "B_Jawa", "BJAW", "SBK", "Seni Budaya"]
+        
+        for (g, r, m, h, j), var in self.variables.items():
+            # Jika ditaruh di jam ke-1 sampai jam ke-4 (jam pagi)
+            if m in MAPEL_PRIORITAS_SIANG and j <= 4:
+                self.penalties.append(var * 6000) # Denda jika ditaruh pagi
+
+        # --- ATURAN D: Insentif Tambahan untuk Prakarya & B. Jawa di Jam Paling Akhir ---
+        for h in self.list_hari:
+            if self.jam_per_hari[h]:
+                jam_terakhir_list = sorted(self.jam_per_hari[h])[-2:] # Ambil 2 jam terakhir di hari tersebut
+                for (g, r, m, h_var, j_var), var in self.variables.items():
+                    # Jika ditempatkan di luar 2 jam terakhir hari tersebut, beri penalti ringan
+                    if m in MAPEL_PRIORITAS_SIANG and h_var == h and j_var not in jam_terakhir_list:
+                        self.penalties.append(var * 1500)
+
+        # --- ATURAN E: Batasi Maksimal 4 Mapel Sehari per Kelas ---
         for r in self.list_rombel:
             for h in self.list_hari:
                 mapel_hari_ini_indicators = []
@@ -236,7 +266,7 @@ class SchedulerSolver:
                     self.model.Add(over_limit >= 0)
                     self.penalties.append(over_limit * 300)
 
-        # Hubungkan ke fungsi tujuan minimalisasi penalti keseluruhan
+        # Hubungkan seluruh penalti ke fungsi objektif minimalisasi
         self.model.Minimize(sum(self.penalties))
 
         # 6. SOLVER EXECUTION
