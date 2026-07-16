@@ -14,7 +14,6 @@ class Scheduler:
         # 2. Normalisasi & Penyesuaian Kolom ROMBEL/KELAS
         self.rombel = db["Rombel"].copy()
         self.rombel.columns = [c.replace(" ", "_") for c in self.rombel.columns]
-        # Jika kolom 'Kelas' ada, duplikat/ganti namanya menjadi 'ID_Rombel' & 'Nama_Rombel' untuk AI
         if "Kelas" in self.rombel.columns:
             self.rombel["ID_Rombel"] = self.rombel["Kelas"]
             self.rombel["Nama_Rombel"] = self.rombel["Kelas"]
@@ -22,14 +21,12 @@ class Scheduler:
         # 3. Normalisasi & Penyesuaian Kolom GURU_MENGAJAR
         self.mengajar = db["Guru_Mengajar"].copy()
         self.mengajar.columns = [c.replace(" ", "_") for c in self.mengajar.columns]
-        # Petakan kolom 'Kelas' di tabel mengajar menjadi 'ID_Rombel'
         if "Kelas" in self.mengajar.columns:
             self.mengajar["ID_Rombel"] = self.mengajar["Kelas"]
 
         # 4. Normalisasi Kolom MAPEL
         self.mapel = db["Mapel"].copy()
         self.mapel.columns = [c.replace(" ", "_") for c in self.mapel.columns]
-        # Pastikan ID_Mapel tersedia
         if "ID_Mapel" not in self.mapel.columns and "Mapel" in self.mapel.columns:
             self.mapel["ID_Mapel"] = self.mapel["Mapel"]
             self.mapel["Nama_Mapel"] = self.mapel["Mapel"]
@@ -39,7 +36,6 @@ class Scheduler:
         # 5. Normalisasi Kolom HARI_JAM
         self.hari_jam = db["Hari_Jam"].copy()
         self.hari_jam.columns = [c.replace(" ", "_") for c in self.hari_jam.columns]
-        # Petakan kolom 'Jam' menjadi 'Jam_Ke' agar dibaca lancar oleh Solver
         if "Jam" in self.hari_jam.columns:
             self.hari_jam["Jam_Ke"] = self.hari_jam["Jam"]
         
@@ -65,14 +61,25 @@ class Scheduler:
         if self.df_hasil.empty:
             return None
         
-        # PERBAIKAN UTAMA: Buat duplikat database sementara dengan tabel-tabel yang sudah bersih/dinormalisasi
-        clean_db = {
-            "Guru": self.guru,
-            "Guru_Mengajar": self.mengajar,
-            "Rombel": self.rombel,
-            "Mapel": self.mapel,
-            "Hari_Jam": self.hari_jam
+        # DENORMALISASI KHUSUS UNTUK EXPORTER:
+        # Kembalikan semua nama kolom ke format asli dengan spasi ("Jam Ke", "ID Guru", dll.)
+        # agar sesuai dengan ekspektasi exporter.py bawaan Anda.
+        df_export = self.df_hasil.copy()
+        
+        rename_map = {
+            "ID_Guru": "ID Guru",
+            "Nama_Guru": "Nama Guru",
+            "ID_Rombel": "Kelas",
+            "ID_Mapel": "Mapel",
+            "Jam_Ke": "Jam Ke"
         }
         
-        exporter = ScheduleExporter(self.df_hasil, clean_db)
+        # Ganti nama kolom yang ada di df_export jika kolom tersebut eksis
+        df_export = df_export.rename(columns={k: v for k, v in rename_map.items() if k in df_export.columns})
+        
+        # Tambahkan kolom "Jam Ke" jika exporter membutuhkannya secara spesifik dari "Jam"
+        if "Jam Ke" not in df_export.columns and "Jam" in df_export.columns:
+            df_export["Jam Ke"] = df_export["Jam"]
+            
+        exporter = ScheduleExporter(df_export, self.db)
         return exporter.generate_excel()
