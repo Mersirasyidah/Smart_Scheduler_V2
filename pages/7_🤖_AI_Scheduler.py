@@ -82,7 +82,7 @@ if generate:
         scheduler.prepare_engine()
         progress.progress(35)
 
-        # 🔍 AUDIT KEPADATAN JP VS SLOT SECARA MANDIRI
+        # AUDIT KEPADATAN JP VS SLOT SECARA MANDIRI
         total_jp = int(scheduler.mengajar[scheduler.col_jp].sum())
         total_slot = len(scheduler.slot)
         total_kelas = len(scheduler.rombel)
