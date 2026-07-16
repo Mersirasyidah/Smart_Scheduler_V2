@@ -22,7 +22,7 @@ class SchedulerSolver:
         self.idx_slot = self.df_slot.index.tolist()
         self.idx_kelas = list(self.df_rombel)
         
-        # Variabel Keputusan CP-SAT: vars[(m_idx, t_idx)] -> Boolean (1 jika mengajar, 0 jika tidak)
+        # Variabel Keputusan CP-SAT: vars[(m_idx, t_idx)]
         self.vars = {}
         for m_idx in self.idx_mengajar:
             for t_idx in self.idx_slot:
@@ -33,14 +33,10 @@ class SchedulerSolver:
         builder = ConstraintBuilder(self)
         builder.apply_all()
         
-        # Berikan objective function opsional: Maksimalkan persebaran jam agar merata (opsional soft constraint)
-        # Di sini kita biarkan default agar pencarian solusi berjalan sangat cepat.
-        
-        # Parameter Solver
+        # Konfigurasi Solver
         self.solver.parameters.max_time_in_seconds = float(timeout_seconds)
         self.solver.parameters.log_search_progress = True
         
-        # Selesaikan masalah (Solve)
         status = self.solver.Solve(self.model)
         
         if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
@@ -48,7 +44,7 @@ class SchedulerSolver:
         return False
 
     def extract_results(self):
-        """Mengubah variabel biner hasil optimasi menjadi format dataframe jadwal"""
+        """Mengonversi variabel biner hasil optimasi menjadi format dataframe jadwal"""
         hasil = []
         for m_idx, row_m in self.df_mengajar.iterrows():
             for t_idx, row_t in self.df_slot.iterrows():
@@ -65,7 +61,6 @@ class SchedulerSolver:
                     
         df_hasil = pd.DataFrame(hasil)
         if not df_hasil.empty:
-            # Urutkan berdasarkan Hari dan Jam agar rapi
             hari_order = {"Senin": 1, "Selasa": 2, "Rabu": 3, "Kamis": 4, "Jumat": 5}
             df_hasil["Hari_Order"] = df_hasil["Hari"].map(hari_order)
             df_hasil = df_hasil.sort_values(by=["Hari_Order", "Jam", "Kelas"]).drop(columns=["Hari_Order"])
