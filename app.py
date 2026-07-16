@@ -1,33 +1,37 @@
-# app.py
-import streamlit as st
-from database import load_database
+# scheduler.py
+import pandas as pd
+from scheduler.solver import SchedulerSolver
+from scheduler.exporter import ScheduleExporter
 
-st.set_page_config(
-    page_title="Smart Scheduler V2",
-    page_icon="📚",
-    layout="wide"
-)
+class Scheduler:
+    def __init__(self, db):
+        self.db = db
+        self.guru = db["Guru"]
+        self.mengajar = db["Guru_Mengajar"]
+        self.rombel = db["Rombel"]
+        self.mapel = db["Mapel"]
+        self.hari_jam = db["Hari_Jam"]
+        
+        self.col_jp = "JP"
+        self.solver_engine = None
+        self.df_hasil = pd.DataFrame()
 
-db = load_database()
+    def prepare_engine(self):
+        # Saring slot yang aktif / hanya bertipe pembelajaran pembelajaran
+        self.slot = self.hari_jam[self.hari_jam["Jenis"].str.lower() == "pembelajaran"].copy()
+        self.solver_engine = SchedulerSolver(self)
 
-st.title("📚 SMART SCHEDULER V2")
-st.subheader("Sistem Penyusunan Jadwal Pembelajaran SMP")
-st.divider()
+    def solve(self, timeout_seconds=60.0):
+        if not self.solver_engine:
+            self.prepare_engine()
+        
+        sukses = self.solver_engine.run_solver(timeout_seconds)
+        if sukses:
+            self.df_hasil = self.solver_engine.extract_results()
+        return sukses
 
-st.header("📂 Database")
-st.write("Sheet yang berhasil dideteksi:")
-for sheet in db.keys():
-    st.success(f"✔️ Sheet: {sheet}")
-
-st.divider()
-
-st.header("📊 Dashboard Statistik")
-col1, col2, col3 = st.columns(3)
-
-jumlah_guru = len(db["Guru"]) if "Guru" in db else 0
-jumlah_mapel = len(db["Mapel"]) if "Mapel" in db else 0
-jumlah_rombel = len(db["Rombel"]) if "Rombel" in db else 0
-
-col1.metric("👨‍🏫 Total Guru", jumlah_guru)
-col2.metric("📖 Total Mata Pelajaran", jumlah_mapel)
-col3.metric("🏫 Total Rombel", jumlah_rombel)
+    def export(self):
+        if self.df_hasil.empty:
+            return None
+        exporter = ScheduleExporter(self.df_hasil, self.db)
+        return exporter.generate_excel()
