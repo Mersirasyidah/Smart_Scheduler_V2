@@ -14,7 +14,7 @@ class Scheduler:
         # 2. Normalisasi & Penyesuaian Kolom ROMBEL/KELAS
         self.rombel = db["Rombel"].copy()
         self.rombel.columns = [c.replace(" ", "_") for c in self.rombel.columns]
-        # PERBAIKAN UTAMA: Jika kolom 'Kelas' ada, duplikat/ganti namanya menjadi 'ID_Rombel' & 'Nama_Rombel' untuk AI
+        # Jika kolom 'Kelas' ada, duplikat/ganti namanya menjadi 'ID_Rombel' & 'Nama_Rombel' untuk AI
         if "Kelas" in self.rombel.columns:
             self.rombel["ID_Rombel"] = self.rombel["Kelas"]
             self.rombel["Nama_Rombel"] = self.rombel["Kelas"]
@@ -22,7 +22,7 @@ class Scheduler:
         # 3. Normalisasi & Penyesuaian Kolom GURU_MENGAJAR
         self.mengajar = db["Guru_Mengajar"].copy()
         self.mengajar.columns = [c.replace(" ", "_") for c in self.mengajar.columns]
-        # PERBAIKAN UTAMA: Petakan kolom 'Kelas' di tabel mengajar menjadi 'ID_Rombel'
+        # Petakan kolom 'Kelas' di tabel mengajar menjadi 'ID_Rombel'
         if "Kelas" in self.mengajar.columns:
             self.mengajar["ID_Rombel"] = self.mengajar["Kelas"]
 
@@ -39,6 +39,9 @@ class Scheduler:
         # 5. Normalisasi Kolom HARI_JAM
         self.hari_jam = db["Hari_Jam"].copy()
         self.hari_jam.columns = [c.replace(" ", "_") for c in self.hari_jam.columns]
+        # PERBAIKAN UTAMA: Petakan kolom 'Jam' menjadi 'Jam_Ke' agar dibaca lancar oleh Solver
+        if "Jam" in self.hari_jam.columns:
+            self.hari_jam["Jam_Ke"] = self.hari_jam["Jam"]
         
         self.col_jp = "JP"
         self.solver_engine = None
