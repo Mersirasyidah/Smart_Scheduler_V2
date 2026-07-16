@@ -6,11 +6,11 @@ class ConstraintBuilder:
         self.model = solver_engine.model
         self.x = solver_engine.x
         
-        # Mengambil data pembantu dari engine
-        self.mengajar = se.mengajar
-        self.slot = se.slot
-        self.rombel = se.rombel
-        self.guru = se.guru
+        # PERBAIKAN: Menggunakan solver_engine (bukan se)
+        self.mengajar = solver_engine.mengajar
+        self.slot = solver_engine.slot
+        self.rombel = solver_engine.rombel
+        self.guru = solver_engine.guru
 
     def apply_all(self):
         """Menjalankan semua fungsi batasan (constraints) pada model CP-SAT"""
