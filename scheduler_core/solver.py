@@ -163,9 +163,6 @@ class SchedulerSolver:
             print("× GAGAL: Tidak menemukan solusi.")
             return False
 
-    # =====================================================
-    # FUNGSI PERBAIKAN: EKSTRAKSI HASIL JADWAL
-    # =====================================================
     def extract_results(self):
         """Mengekstrak variabel keputusan OR-Tools menjadi DataFrame output"""
         if self.solver is None:
@@ -183,7 +180,7 @@ class SchedulerSolver:
                 t = tugas_lookup[t_id]
                 rows.append({
                     "Hari": hari,
-                    "Jam": jam,
+                    "Jam_Ke": jam, # <-- DIUBAH DI SINI (Sebelumnya "Jam")
                     "Kelas": t["rombel"],
                     "ID_Guru": t["guru"],
                     "Nama_Guru": guru_dict.get(t["guru"], "Unknown"),
@@ -193,8 +190,8 @@ class SchedulerSolver:
 
         df_hasil = pd.DataFrame(rows)
         
-        # Urutkan secara rapi berdasarkan Hari, Kelas, dan Jam Pelajaran
+        # Urutkan secara rapi berdasarkan Hari, Kelas, dan Jam_Ke
         if not df_hasil.empty:
-            df_hasil = df_hasil.sort_values(by=["Hari", "Kelas", "Jam"]).reset_index(drop=True)
+            df_hasil = df_hasil.sort_values(by=["Hari", "Kelas", "Jam_Ke"]).reset_index(drop=True) # <-- DIUBAH DI SINI
             
         return df_hasil
