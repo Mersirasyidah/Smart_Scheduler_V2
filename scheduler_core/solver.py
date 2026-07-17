@@ -1,13 +1,16 @@
 import pandas as pd
 from ortools.sat.python import cp_model
 
+
 class SchedulerSolver:
+
     def __init__(self, scheduler):
         self.scheduler = scheduler
         self.model = cp_model.CpModel()
+        self.solver = None  # Tempat menyimpan status solver setelah run
 
         # =====================================================
-        # 1. DATA MASTER & STANDARDISASI KOLOM
+        # DATA MASTER & STANDARDISASI KOLOM
         # =====================================================
         self.guru = scheduler.guru.copy()
         self.rombel = scheduler.rombel.copy()
@@ -23,7 +26,6 @@ class SchedulerSolver:
         self.list_mapel = self.mapel["ID_Mapel"].tolist()
         self.list_hari = self.slot["Hari"].unique().tolist()
 
-        # Ambil hanya jam berjenis Pembelajaran
         slot_belajar = self.slot[self.slot["Jenis"].str.upper() == "PEMBELAJARAN"]
         self.jam_per_hari = {}
         for hari in self.list_hari:
@@ -32,7 +34,7 @@ class SchedulerSolver:
             )
 
         # =====================================================
-        # 2. PARSING BLOK JP DARI KOLOM PEMBAGIAN
+        # PARSING BLOK JP DARI KOLOM PEMBAGIAN
         # =====================================================
         self.tugas_mengajar = []
         tugas_id = 0
@@ -66,9 +68,6 @@ class SchedulerSolver:
                     })
                     tugas_id += 1
 
-        # =====================================================
-        # 3. KATEGORI MAPEL
-        # =====================================================
         self.mapel_prioritas_pagi = set()
         self.mapel_pjok = set()
         self.mapel_prioritas_siang = set()
@@ -84,10 +83,9 @@ class SchedulerSolver:
                 self.mapel_prioritas_siang.add(row["ID_Mapel"])
 
         self.variables = {}
-        self.penalties = []  # Menampung penalti pelanggaran jadwal ideal
+        self.penalties = []
 
     def run_solver(self, timeout_seconds=120):
-        # Inisialisasi Variabel Utama
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             for hari in self.list_hari:
@@ -104,11 +102,7 @@ class SchedulerSolver:
                     [self.variables[(t_id, hari, jam)] for jam in self.jam_per_hari[hari]]
                 )
 
-        # =====================================================
-        # ABSOLUTE HARD CONSTRAINTS (Wajib & Mutlak dipenuhi)
-        # =====================================================
-        
-        # 1. Total JP per blok tugas harus terpenuhi di hari aktifnya
+        # HARD CONSTRAINTS
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             self.model.Add(
@@ -116,21 +110,18 @@ class SchedulerSolver:
             )
             self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
 
-        # 2. Konflik Rombel: 1 Kelas hanya bisa menerima 1 mapel pada 1 jam pelajaran
         for rombel in self.list_rombel:
             tugas_rombel = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_rombel) <= 1)
 
-        # 3. Konflik Guru: 1 Guru hanya bisa mengajar di 1 kelas pada 1 jam pelajaran
         for guru in self.list_guru:
             tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_guru) <= 1)
 
-        # 4. Blok Jam Harus Berurutan (Sliding Window Tanpa Celah/Gap)
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             target_jp = t["jp"]
@@ -145,43 +136,65 @@ class SchedulerSolver:
                             self.model.Add(self.variables[(t_id, hari, jam_hari[i+offset])] == 1).OnlyEnforceIf(s_var)
                     self.model.Add(sum(start_vars) == tugas_hari_aktif[(t_id, hari)])
 
-        # =====================================================
-        # SOFT CONSTRAINTS (Prioritas Menggunakan Sistem Denda)
-        # =====================================================
+        # SOFT CONSTRAINTS
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
-            
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
-                    
-                    # PJOK (M11) idealnya jangan diletakkan di jam siang (> 6)
                     if mapel in self.mapel_pjok and jam > 6:
                         self.penalties.append(self.variables[(t_id, hari, jam)] * 100)
-                        
-                    # Mapel Pagi idealnya jangan diletakkan di jam siang (> 6)
                     elif mapel in self.mapel_prioritas_pagi and jam > 6:
                         self.penalties.append(self.variables[(t_id, hari, jam)] * 50)
-                        
-                    # Mapel Siang idealnya jangan diletakkan di jam pagi (< 5)
                     elif mapel in self.mapel_prioritas_siang and jam < 5:
                         self.penalties.append(self.variables[(t_id, hari, jam)] * 50)
 
-        # Tujuan optimasi: meminimalkan pelanggaran aturan
         self.model.Minimize(sum(self.penalties))
 
-        # =====================================================
-        # EXECUTE SOLVER
-        # =====================================================
-        solver = cp_model.CpSolver()
-        solver.parameters.max_time_in_seconds = timeout_seconds
-        status = solver.Solve(self.model)
+        # Simpan objek solver ke instance class
+        self.solver = cp_model.CpSolver()
+        self.solver.parameters.max_time_in_seconds = timeout_seconds
+        status = self.solver.Solve(self.model)
         
         if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-            print(f"✓ BERHASIL: Jadwal ditemukan dengan skor penalti minimal!")
-            
-            # (Silakan teruskan logika penyimpanan/export dataframe jadwal Anda ke Excel di sini)
+            print("✓ BERHASIL: Jadwal ditemukan!")
             return True
         else:
-            print("× GAGAL: Mohon periksa kembali total data mengajar Anda.")
+            print("× GAGAL: Tidak menemukan solusi.")
             return False
+
+    # =====================================================
+    # FUNGSI PERBAIKAN: EKSTRAKSI HASIL JADWAL
+    # =====================================================
+    def extract_results(self):
+        """Mengekstrak variabel keputusan OR-Tools menjadi DataFrame output"""
+        if self.solver is None:
+            return pd.DataFrame()
+
+        rows = []
+        guru_dict = dict(zip(self.guru['ID_Guru'], self.guru['Nama_Guru']))
+        mapel_dict = dict(zip(self.mapel['ID_Mapel'], self.mapel['Nama_Mapel']))
+
+        # Mapping data sub-tugas berdasarkan id_tugas agar pemanggilan cepat
+        tugas_lookup = {t["id_tugas"]: t for t in self.tugas_mengajar}
+
+        for (t_id, hari, jam), var in self.variables.items():
+            if self.solver.Value(var) == 1:
+                t = tugas_lookup[t_id]
+                rows.append({
+                    "Hari": hari,
+                    "Jam": jam,
+                    "Kelas": t["rombel"],
+                    "ID_Guru": t["guru"],
+                    "Nama_Guru": guru_dict.get(t["guru"], "Unknown"),
+                    "ID_Mapel": t["mapel"],
+                    "Nama_Mapel": mapel_dict.get(t["mapel"], "Unknown"),
+                })
+
+        df_hasil = pd.DataFrame(rows)
+        
+        # Urutkan secara rapi berdasarkan Hari, Kelas, dan Jam Pelajaran
+        if not df_hasil.empty:
+            df_hasil = df_hasil.sort_values(by=["Hari", "Kelas", "Jam"]).reset_index(drop=True)
+            
+        return df_hasil
