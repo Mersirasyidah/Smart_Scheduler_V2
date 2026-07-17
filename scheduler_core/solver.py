@@ -245,16 +245,11 @@ class SchedulerSolver:
                     self.model.Add(var == 0).OnlyEnforceIf(is_kelompok_pagi[r].Not()).OnlyEnforceIf(self.model.NewBoolVar("").WithEquivalent(j <= 3))
 
         # --- 🎯 B. VALIDASI MAPEL SULIT/PRIORITAS 1 DI JAM AWAL (JAM 1 S/D 3) ---
-        # Membaca prioritas dari Excel. Diasumsikan ada kolom 'Prioritas' (berisi 1, 2, atau 3)
-        # Jika kolom tidak ada di file excel, kita buat fallback default untuk Matematika, IPA, B.Indo, B.Inggris.
-        
-        # Ambil set ID_Mapel yang tergolong Prioritas 1
         mapel_prioritas_1 = set()
         if "Prioritas" in self.mapel.columns:
-            # Mengambil mapel yang di Excel prioritasnya bernilai 1 atau "Prioritas 1"
             mapel_prioritas_1 = set(self.mapel[self.mapel["Prioritas"].astype(str).str.contains("1")]["ID_Mapel"].tolist())
         
-        # Jika kolom Prioritas belum ada / kosong, gunakan daftar fallback nama mapel sulit ini:
+        # Fallback manual jika kolom Prioritas tidak ditemukan di Excel Anda:
         if not mapel_prioritas_1:
             MAPEL_SULIT_FALLBACK = ["MAT", "Matematika", "IPA", "Fisika", "Biologi", "IND", "B_IND", "B_Indo", "Bahasa Indonesia", "ING", "B_ING", "B_Ingg", "Bahasa Inggris"]
             mapel_prioritas_1 = set(self.mapel[self.mapel["ID_Mapel"].isin(MAPEL_SULIT_FALLBACK)]["ID_Mapel"].tolist())
@@ -262,26 +257,24 @@ class SchedulerSolver:
         # Aturan Insentif & Penalti untuk Mapel Prioritas 1:
         for (g, r, m, h, j), var in self.variables.items():
             if m in mapel_prioritas_1:
-                # Sangat bagus jika ditaruh di jam 1, 2, atau 3 (Beri reward negatif / insentif)
+                # Prioritaskan agar ditempatkan di jam awal (1, 2, atau 3)
                 if j <= 3:
                     self.penalties.append(var * -500) 
-                # Sebaliknya, berikan penalti tinggi jika mapel sulit ini ditaruh di atas jam ke-5
+                # Hindari menaruh pelajaran berat di jam ke-5 ke atas
                 elif j >= 5:
                     self.penalties.append(var * 9000)
 
-        # --- 🎯 C. PENALTI: Mapel Siang/Ringan (Prakarya, B. Jawa, Seni Budaya) di Jam Pagi ---
+        # --- 🎯 C. PENALTI: Mapel Ringan/Muatan Lokal di Jam Pagi ---
         MAPEL_PRIORITAS_SIANG = ["Prakarya", "PRK", "Bahasa Jawa", "B_Jawa", "BJAW", "SBK", "Seni Budaya"]
         for (g, r, m, h, j), var in self.variables.items():
-            # Jika mapel santai dipaksa ditaruh di jam pagi (jam ke-1 s/d jam ke-3)
             if m in MAPEL_PRIORITAS_SIANG and j <= 3:
-                self.penalties.append(var * 7000) # Beri denda tinggi agar didorong ke jam akhir
+                self.penalties.append(var * 7000)
 
         # --- 🎯 D. INSENTIF: Menempelkan Mapel Ringan di Jam Paling Akhir ---
         for h in self.list_hari:
             if self.jam_per_hari[h]:
                 jam_terakhir_list = sorted(self.jam_per_hari[h])[-2:] # Ambil 2 jam terakhir di hari tersebut
                 for (g, r, m, h_var, j_var), var in self.variables.items():
-                    # Jika ditempatkan di luar 2 jam terakhir hari tersebut, beri penalti ringan
                     if m in MAPEL_PRIORITAS_SIANG and h_var == h and j_var not in jam_terakhir_list:
                         self.penalties.append(var * 1500)
 
@@ -324,3 +317,57 @@ class SchedulerSolver:
                     "Jam_Ke": j
                 })
         return pd.DataFrame(results)
+
+    # =========================================================================
+    # 🎯 KODE DETEKTOR BENTROK OTOMATIS (METODE INTERNAL BARU)
+    # =========================================================================
+    def periksa_bentrok_jadwal(self, df_hasil):
+        """
+        Fungsi untuk memeriksa apakah ada guru bentrok, kelas bentrok,
+        atau pelanggaran aturan jam mengajar PJOK pada DataFrame hasil.
+        """
+        print("\n" + "="*50)
+        print("🔍 MEMULAI SISTEM VALIDASI & DETEKSI BENTROK JADWAL")
+        print("="*50)
+        
+        ada_bentrok = False
+        
+        # 1. Cek Bentrok Guru: Satu guru mengajar di > 1 kelas pada jam yang sama
+        bentrok_guru = df_hasil[df_hasil.duplicated(subset=['ID_Guru', 'Hari', 'Jam_Ke'], keep=False)]
+        if not bentrok_guru.empty:
+            print("❌ DETEKSI BENTROK GURU:")
+            for _, row in bentrok_guru.sort_values(by=['ID_Guru', 'Hari', 'Jam_Ke']).iterrows():
+                print(f"   [BENTROK] Guru {row['ID_Guru']} terdaftar mengajar di Kelas {row['ID_Rombel']} pada hari {row['Hari']} Jam ke-{row['Jam_Ke']}")
+            ada_bentrok = True
+        else:
+            print("✅ Validasi Guru: Aman! Tidak ada guru mengajar di dua kelas berbeda pada jam yang sama.")
+
+        # 2. Cek Bentrok Kelas: Satu kelas menerima > 1 mapel pada jam yang sama
+        bentrok_kelas = df_hasil[df_hasil.duplicated(subset=['ID_Rombel', 'Hari', 'Jam_Ke'], keep=False)]
+        if not bentrok_kelas.empty:
+            print("\n❌ DETEKSI BENTROK KELAS:")
+            for _, row in bentrok_kelas.sort_values(by=['ID_Rombel', 'Hari', 'Jam_Ke']).iterrows():
+                print(f"   [BENTROK] Kelas {row['ID_Rombel']} menerima pelajaran {row['ID_Mapel']} pada hari {row['Hari']} Jam ke-{row['Jam_Ke']}")
+            ada_bentrok = True
+        else:
+            print("✅ Validasi Kelas: Aman! Tidak ada kelas yang menerima lebih dari satu mata pelajaran di jam yang sama.")
+            
+        # 3. Cek Aturan PJOK (Tidak boleh > Jam 6)
+        MAPEL_PJOK = ["PJOK", "Penyas"]
+        pelanggaran_pjok = df_hasil[(df_hasil['ID_Mapel'].isin(MAPEL_PJOK)) & (df_hasil['Jam_Ke'] > 6)]
+        if not pelanggaran_pjok.empty:
+            print("\n⚠️ PELANGGARAN ATURAN PJOK (> JAM 6):")
+            for _, row in pelanggaran_pjok.iterrows():
+                print(f"   [MELANGGAR] PJOK Kelas {row['ID_Rombel']} terjadwal di hari {row['Hari']} Jam ke-{row['Jam_Ke']}")
+            ada_bentrok = True
+        else:
+            print("✅ Validasi PJOK: Aman! Semua mapel PJOK sukses ditaruh di bawah jam ke-6.")
+
+        print("="*50)
+        if not ada_bentrok:
+            print("🎉 JADWAL AMAN TERKENDALI! Silakan ekspor hasilnya.")
+        else:
+            print("⚠️ PERHATIAN: Masih ada aturan yang dilanggar, silakan sesuaikan jadwal kembali.")
+        print("="*50 + "\n")
+        
+        return not ada_bentrok
