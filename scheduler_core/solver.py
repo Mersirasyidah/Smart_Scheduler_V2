@@ -151,7 +151,7 @@ class SchedulerSolver:
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(
-                        sum(self.variables[(t_id, hari, jam)] for t_id in mapel_rombel) <= 1
+                        sum(self.variables[(t_id, hari, jam)] for t_id in tugas_rombel) <= 1 # <-- Sudah Diperbaiki
                     )
 
         # Rule 3: Satu Guru tidak boleh mengajar > 1 kelas di jam yang sama
