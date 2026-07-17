@@ -244,31 +244,38 @@ class SchedulerSolver:
                     # Selasa-Jumat Kelompok Siang: Wajib jam 4-6 (Dilarang jam <= 3)
                     self.model.Add(var == 0).OnlyEnforceIf(is_kelompok_pagi[r].Not()).OnlyEnforceIf(self.model.NewBoolVar("").WithEquivalent(j <= 3))
 
-        # --- 🎯 B. VALIDASI MAPEL SULIT/PRIORITAS 1 DI JAM AWAL (JAM 1 S/D 3) ---
+        # --- 🚫 B. BATASAN MUTLAK MAPEL SULIT/PRIORITAS 1 DI JAM PAGI ---
         mapel_prioritas_1 = set()
         if "Prioritas" in self.mapel.columns:
-            mapel_prioritas_1 = set(self.mapel[self.mapel["Prioritas"].astype(str).str.contains("1")]["ID_Mapel"].tolist())
+            # Membersihkan spasi dan mencocokkan string/angka '1' secara aman
+            prioritas_1_rows = self.mapel[self.mapel["Prioritas"].astype(str).str.strip().str.contains("1")]
+            mapel_prioritas_1 = set(prioritas_1_rows["ID_Mapel"].tolist())
         
-        # Fallback manual jika kolom Prioritas tidak ditemukan di Excel Anda:
+        # Fallback manual jika kolom di Excel Anda kosong atau tidak terbaca:
         if not mapel_prioritas_1:
-            MAPEL_SULIT_FALLBACK = ["MAT", "Matematika", "IPA", "Fisika", "Biologi", "IND", "B_IND", "B_Indo", "Bahasa Indonesia", "ING", "B_ING", "B_Ingg", "Bahasa Inggris"]
-            mapel_prioritas_1 = set(self.mapel[self.mapel["ID_Mapel"].isin(MAPEL_SULIT_FALLBACK)]["ID_Mapel"].tolist())
+            MAPEL_SULIT_FALLBACK = [
+                "MAT", "Matematika", "MTK", 
+                "IPA", "Fisika", "Biologi", "Kimia",
+                "IND", "B_IND", "B_Indo", "Bahasa Indonesia", "B_Indonesia",
+                "ING", "B_ING", "B_Ingg", "Bahasa Inggris", "B_Inggris"
+            ]
+            mapel_prioritas_1 = set(self.mapel[self.mapel["ID_Mapel"].str.upper().isin([x.upper() for x in MAPEL_SULIT_FALLBACK])]["ID_Mapel"].tolist())
 
-        # Aturan Insentif & Penalti untuk Mapel Prioritas 1:
+        # MENERAPKAN ATURAN KERAS (HARD CONSTRAINT):
+        # Mapel Prioritas 1 HANYA BOLEH ditempatkan di Jam 1 s/d Jam 4 (Sesi Pagi).
+        # Sama sekali dilarang ditaruh di Jam 5 ke atas!
         for (g, r, m, h, j), var in self.variables.items():
             if m in mapel_prioritas_1:
-                # Prioritaskan agar ditempatkan di jam awal (1, 2, atau 3)
-                if j <= 3:
-                    self.penalties.append(var * -500) 
-                # Hindari menaruh pelajaran berat di jam ke-5 ke atas
-                elif j >= 5:
-                    self.penalties.append(var * 9000)
+                # Jika jam mengajar adalah jam ke-5 atau lebih siang, paksa variabel bernilai 0 (tidak boleh aktif)
+                if j >= 5:
+                    self.model.Add(var == 0)
 
         # --- 🎯 C. PENALTI: Mapel Ringan/Muatan Lokal di Jam Pagi ---
+        # Mapel santai didorong kuat agar tidak mengganggu jam pagi (diberikan penalti jika ditaruh di jam 1-3)
         MAPEL_PRIORITAS_SIANG = ["Prakarya", "PRK", "Bahasa Jawa", "B_Jawa", "BJAW", "SBK", "Seni Budaya"]
         for (g, r, m, h, j), var in self.variables.items():
             if m in MAPEL_PRIORITAS_SIANG and j <= 3:
-                self.penalties.append(var * 7000)
+                self.penalties.append(var * 15000) 
 
         # --- 🎯 D. INSENTIF: Menempelkan Mapel Ringan di Jam Paling Akhir ---
         for h in self.list_hari:
