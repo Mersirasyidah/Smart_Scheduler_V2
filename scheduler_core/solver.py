@@ -215,15 +215,39 @@ class SchedulerSolver:
         # 5. SOFT CONSTRAINTS (PENALTI KUALITAS) & HARD TIME CONSTRAINTS
         # =========================================================================
         
-        # --- 🚫 BATASAN MUTLAK (HARD CONSTRAINT): PJOK Hanya Boleh di Jam 1, 2, 3 ---
-        # NOTE: Sesuaikan nama mapel olahraga Anda di list di bawah ini
+        # --- 🚫 [UPDATE UTAMA] BATASAN MUTLAK PJOK (10 KELAS PAGI, 5 KELAS SIANG) ---
         MAPEL_PJOK = ["PJOK", "Penyas"]
+        
+        # Buat variabel keputusan keputusan biner untuk masing-masing Rombel (Kelas)
+        # 1 = Kelas masuk Kelompok Pagi (Jam 1-3), 0 = Kelas masuk Kelompok Siang (Jam 4-6)
+        is_kelompok_pagi = {}
+        for r in self.list_rombel:
+            is_kelompok_pagi[r] = self.model.NewBoolVar(f"pjok_pagi_r{r}")
+            
+        # Aturan Keras: Total kelas di kelompok pagi HARUS tepat 10 kelas
+        self.model.Add(sum(is_kelompok_pagi[r] for r in self.list_rombel) == 10)
+        
         for (g, r, m, h, j), var in self.variables.items():
             if m in MAPEL_PJOK:
-                # Jika jam mengajar (j) di atas jam 3 (yaitu jam 4, 5, 6, dst)
-                if j > 3:
-                    # Kunci variabel menjadi 0 (Dilarang keras dijadwalkan!)
-                    self.model.Add(var == 0)
+                # --- ATURAN HARI SENIN (Khusus) ---
+                if h in ["Senin", "SENIN", "senin"]:
+                    # Senin Pagi (Kelompok Pagi): Wajib Jam 2, 3, 4 (karena Jam 1 dipakai upacara)
+                    # Jika kelas masuk kelompok pagi, dilarang di Jam 1 ATAU Jam >= 5
+                    self.model.Add(var == 0).OnlyEnforceIf(is_kelompok_pagi[r]).OnlyEnforceIf(self.model.NewBoolVar("").WithEquivalent(j == 1 or j >= 5))
+                    
+                    # Senin Siang (Kelompok Siang): Wajib Jam 4, 5, 6
+                    # Jika kelas masuk kelompok siang, dilarang di Jam 1-3 ATAU Jam >= 7
+                    self.model.Add(var == 0).OnlyEnforceIf(is_kelompok_pagi[r].Not()).OnlyEnforceIf(self.model.NewBoolVar("").WithEquivalent(j <= 3 or j >= 7))
+                
+                # --- ATURAN SELASA S/D JUMAT ---
+                else:
+                    # Selasa-Jumat Pagi (Kelompok Pagi): Wajib Jam 1, 2, 3
+                    # Dilarang di Jam >= 4 jika terpilih kelompok pagi
+                    self.model.Add(var == 0).OnlyEnforceIf(is_kelompok_pagi[r]).OnlyEnforceIf(self.model.NewBoolVar("").WithEquivalent(j >= 4))
+                    
+                    # Selasa-Jumat Siang (Kelompok Siang): Wajib Jam 4, 5, 6
+                    # Dilarang di Jam <= 3 ATAU Jam >= 7 jika kelompok siang
+                    self.model.Add(var == 0).OnlyEnforceIf(is_kelompok_pagi[r].Not()).OnlyEnforceIf(self.model.NewBoolVar("").WithEquivalent(j <= 3 or j >= 7))
 
         # --- 🎯 PENALTI: Matematika Diupayakan di Jam Pagi (Jam 1 - 4) ---
         MAPEL_MATEMATIKA = ["MAT", "Matematika"]
