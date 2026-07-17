@@ -10,573 +10,211 @@ class SchedulerSolver:
         self.model = cp_model.CpModel()
 
         # =====================================================
-        # DATA MASTER
+        # DATA MASTER (Menyesuaikan penamaan kolom Excel Anda)
         # =====================================================
-
         self.guru = scheduler.guru.copy()
         self.rombel = scheduler.rombel.copy()
         self.mengajar = scheduler.mengajar.copy()
         self.mapel = scheduler.mapel.copy()
         self.slot = scheduler.slot.copy()
 
-        # =====================================================
-        # LIST DATA
-        # =====================================================
+        # Standardisasi nama kolom agar aman dari variasi spasi/underscore
+        for df in [self.guru, self.rombel, self.mengajar, self.mapel, self.slot]:
+            df.columns = [c.replace(" ", "_") for c in df.columns]
 
+        # Master list data
         self.list_guru = self.guru["ID_Guru"].tolist()
-        self.list_rombel = self.rombel["ID_Rombel"].tolist()
+        self.list_rombel = self.rombel["Kelas"].tolist() if "Kelas" in self.rombel.columns else self.rombel["ID_Rombel"].tolist()
         self.list_mapel = self.mapel["ID_Mapel"].tolist()
         self.list_hari = self.slot["Hari"].unique().tolist()
 
-        # =====================================================
-        # JAM PER HARI
-        # =====================================================
-
+        # Jam per hari
         self.jam_per_hari = {}
-
+        # Filter hanya untuk baris Jenis 'Pembelajaran' agar jam Upacara/Istirahat tidak diisi
+        slot_belajar = self.slot[self.slot["Jenis"].str.upper() == "PEMBELAJARAN"]
         for hari in self.list_hari:
-
             self.jam_per_hari[hari] = sorted(
-                self.slot[
-                    self.slot["Hari"] == hari
-                ]["Jam_Ke"].tolist()
+                slot_belajar[slot_belajar["Hari"] == hari]["Jam"].dropna().astype(int).tolist()
             )
 
         # =====================================================
-        # VARIABEL SOLVER
+        # PARSING PEMBAGIAN JP (Kunci agar tidak Infeasible)
         # =====================================================
+        self.tugas_mengajar = []
+        tugas_id = 0
+        
+        for _, row in self.mengajar.iterrows():
+            guru = row["ID_Guru"]
+            # Mendukung nama kolom 'Kelas' atau 'ID_Rombel'
+            rombel = row["Kelas"] if "Kelas" in self.mengajar.columns else row["ID_Rombel"]
+            
+            # Cari ID Mapel berdasarkan nama mapel dari tabel Master Mapel
+            mapel_nama = row["Mapel"]
+            match_mapel = self.mapel[self.mapel["Nama_Mapel"].str.upper() == str(mapel_nama).strip().upper()]
+            if not match_mapel.empty:
+                mapel_id = match_mapel.iloc[0]["ID_Mapel"]
+            else:
+                mapel_id = row.get("ID_Mapel", "M99")
 
-        self.variables = {}
-        self.is_active_day = {}
-        self.penalties = []
+            pembagian_str = str(row["Pembagian"]).strip()
+            
+            # Deteksi pecahan blok jam (Contoh: "2,2,1" atau "2.2" atau "3")
+            if "," in pembagian_str:
+                list_jp = [int(x) for x in pembagian_str.split(",") if x.strip().isdigit()]
+            elif "." in pembagian_str:
+                list_jp = [int(x) for x in pembagian_str.split(".") if x.strip().isdigit()]
+            else:
+                try:
+                    list_jp = [int(float(pembagian_str))]
+                except:
+                    list_jp = [int(row["JP"])]
+
+            # Pecah menjadi sub-tugas independen per hari
+            for jp_blok in list_jp:
+                if jp_blok > 0:
+                    self.tugas_mengajar.append({
+                        "id_tugas": tugas_id,
+                        "guru": guru,
+                        "rombel": rombel,
+                        "mapel": mapel_id,
+                        "jp": jp_blok
+                    })
+                    tugas_id += 1
 
         # =====================================================
-        # KATEGORI MAPEL
+        # KATEGORI MAPEL (Otomatis deteksi Shift dari Excel)
         # =====================================================
-
         self.mapel_prioritas_pagi = set()
         self.mapel_pjok = set()
         self.mapel_prioritas_siang = set()
         self.mapel_normal = set()
 
-        # =====================================================
-        # MEMBACA KATEGORI DARI EXCEL & DETEKSI OTOMATIS
-        # =====================================================
+        for _, row in self.mapel.iterrows():
+            kode = str(row["ID_Mapel"]).strip().upper()
+            shift = str(row.get("Shift", "")).strip().upper()
+            
+            if kode == "M11" or "JASMANI" in str(row["Nama_Mapel"]).upper():
+                self.mapel_pjok.add(row["ID_Mapel"])
+            elif shift == "PAGI" or row.get("Prioritas", 3) == 1:
+                self.mapel_prioritas_pagi.add(row["ID_Mapel"])
+            elif shift == "SIANG":
+                self.mapel_prioritas_siang.add(row["ID_Mapel"])
+            else:
+                self.mapel_normal.add(row["ID_Mapel"])
 
-        if "Kategori" in self.mapel.columns:
-            for _, row in self.mapel.iterrows():
-                kategori = str(row["Kategori"]).strip().upper()
-                kode = str(row["ID_Mapel"]).strip().upper()
-
-                # Pengecekan eksplisit untuk kode M11 sebagai PJOK
-                if kode == "M11" or kategori == "PJOK":
-                    self.mapel_pjok.add(row["ID_Mapel"])
-                elif kategori == "PRIORITAS_PAGI":
-                    self.mapel_prioritas_pagi.add(row["ID_Mapel"])
-                elif kategori == "SIANG":
-                    self.mapel_prioritas_siang.add(row["ID_Mapel"])
-                else:
-                    self.mapel_normal.add(row["ID_Mapel"])
-        else:
-            # =================================================
-            # FALLBACK OTOMATIS BERDASARKAN KODE / NAMA MAPEL
-            # =================================================
-            for _, row in self.mapel.iterrows():
-                kode = str(row["ID_Mapel"]).strip().upper()
-                nama = ""
-                if "Nama_Mapel" in self.mapel.columns:
-                    nama = str(row["Nama_Mapel"]).strip().upper()
-
-                teks = kode + " " + nama
-
-                # ================================
-                # PJOK (M11 didahulukan)
-                # ================================
-                if (
-                    kode == "M11" 
-                    or "PJOK" in teks 
-                    or "PENJAS" in teks 
-                    or "PENYAS" in teks
-                ):
-                    self.mapel_pjok.add(row["ID_Mapel"])
-
-                # ================================
-                # PRIORITAS PAGI
-                # ================================
-                elif (
-                    "MAT" in teks
-                    or "MATEMATIKA" in teks
-                    or "IPA" in teks
-                    or "BAHASA INDONESIA" in teks
-                    or "INDONESIA" in teks
-                    or "BAHASA INGGRIS" in teks
-                    or "INGGRIS" in teks
-                ):
-                    self.mapel_prioritas_pagi.add(row["ID_Mapel"])
-
-                # ================================
-                # SIANG
-                # ================================
-                elif (
-                    "PRAKARYA" in teks
-                    or "SENI" in teks
-                    or "SBK" in teks
-                    or "BAHASA JAWA" in teks
-                ):
-                    self.mapel_prioritas_siang.add(row["ID_Mapel"])
-
-                else:
-                    self.mapel_normal.add(row["ID_Mapel"])
-
-        # =====================================================
-        # INFORMASI
-        # =====================================================
-
-        print("=" * 60)
-        print("MAPEL PRIORITAS PAGI")
-        print(sorted(self.mapel_prioritas_pagi))
-        print()
-        print("MAPEL PJOK")
-        print(sorted(self.mapel_pjok))
-        print()
-        print("MAPEL PRIORITAS SIANG")
-        print(sorted(self.mapel_prioritas_siang))
-        print()
-        print("MAPEL NORMAL")
-        print(sorted(self.mapel_normal))
-        print("=" * 60)
+        self.variables = {}
 
     # =====================================================
     # RUN SOLVER
     # =====================================================
-
     def run_solver(self, timeout_seconds=120):
+        print(f"Total Sub-Tugas hasil ekstraksi blok: {len(self.tugas_mengajar)}")
 
-        print("=" * 60)
-        print("MEMBANGUN MODEL PENJADWALAN")
-        print("=" * 60)
-
-        # =====================================================
-        # MEMBUAT VARIABEL KEPUTUSAN
-        # =====================================================
-
-        for _, row in self.mengajar.iterrows():
-
-            guru = row["ID_Guru"]
-            rombel = row["ID_Rombel"]
-            mapel = row["ID_Mapel"]
-
+        # 1. Membuat Variabel Keputusan Berbasis Blok Tugas
+        # x[tugas, hari, jam] = 1 jika sub-tugas aktif di slot tersebut
+        for t in self.tugas_mengajar:
+            t_id = t["id_tugas"]
             for hari in self.list_hari:
-
                 for jam in self.jam_per_hari[hari]:
+                    self.variables[(t_id, hari, jam)] = self.model.NewBoolVar(f"t_{t_id}_{hari}_{jam}")
 
-                    self.variables[(guru, rombel, mapel, hari, jam)] = (
-                        self.model.NewBoolVar(
-                            f"x_{guru}_{rombel}_{mapel}_{hari}_{jam}"
-                        )
-                    )
-
-                self.is_active_day[(guru, rombel, mapel, hari)] = (
-                    self.model.NewBoolVar(
-                        f"aktif_{guru}_{rombel}_{mapel}_{hari}"
-                    )
-                )
-
+        # 2. Variabel Pembantu: Apakah sub-tugas diambil di hari tertentu
+        tugas_hari_aktif = {}
+        for t in self.tugas_mengajar:
+            t_id = t["id_tugas"]
+            for hari in self.list_hari:
+                tugas_hari_aktif[(t_id, hari)] = self.model.NewBoolVar(f"aktif_t_{t_id}_{hari}")
+                
+                # Hubungkan dengan slot jam
                 self.model.AddMaxEquality(
-                    self.is_active_day[(guru, rombel, mapel, hari)],
-                    [
-                        self.variables[(guru, rombel, mapel, hari, jam)]
-                        for jam in self.jam_per_hari[hari]
-                    ]
+                    tugas_hari_aktif[(t_id, hari)],
+                    [self.variables[(t_id, hari, jam)] for jam in self.jam_per_hari[hari]]
                 )
 
-        print("✓ Variabel berhasil dibuat")
-
         # =====================================================
-        # HARD CONSTRAINT
-        # TOTAL JP WAJIB TERPENUHI
+        # HARD CONSTRAINT MODEL
         # =====================================================
 
-        print("Memasang Hard Constraint Total JP")
-
-        for _, row in self.mengajar.iterrows():
-
-            guru = row["ID_Guru"]
-            rombel = row["ID_Rombel"]
-            mapel = row["ID_Mapel"]
-
-            target_jp = int(row[self.scheduler.col_jp])
-
+        # Rule 1: Setiap sub-tugas wajib dipenuhi sesuai alokasi JP-nya
+        for t in self.tugas_mengajar:
+            t_id = t["id_tugas"]
             self.model.Add(
-                sum(
-                    self.variables[(guru, rombel, mapel, hari, jam)]
-                    for hari in self.list_hari
-                    for jam in self.jam_per_hari[hari]
-                )
-                == target_jp
+                sum(self.variables[(t_id, hari, jam)] for hari in self.list_hari for jam in self.jam_per_hari[hari]) == t["jp"]
             )
+            
+            # Constraint: 1 sub-tugas hanya boleh diselesaikan penuh dalam 1 hari tunggal (Blok Utuh)
+            self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
 
-        print("✓ Total JP selesai")
-
-        # =====================================================
-        # HARD CONSTRAINT
-        # SATU KELAS SATU MAPEL
-        # =====================================================
-
-        print("Memasang Hard Constraint Kelas")
-
+        # Rule 2: Satu Rombel tidak boleh menerima > 1 guru di jam yang sama
         for rombel in self.list_rombel:
-
-            data_rombel = self.mengajar[
-                self.mengajar["ID_Rombel"] == rombel
-            ]
-
+            tugas_rombel = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel]
             for hari in self.list_hari:
-
                 for jam in self.jam_per_hari[hari]:
+                    self.model.Add(
+                        sum(self.variables[(t_id, hari, jam)] for t_id in mapel_rombel) <= 1
+                    )
 
-                    aktif = []
-
-                    for _, row in data_rombel.iterrows():
-
-                        aktif.append(
-                            self.variables[
-                                (
-                                    row["ID_Guru"],
-                                    rombel,
-                                    row["ID_Mapel"],
-                                    hari,
-                                    jam
-                                )
-                            ]
-                        )
-
-                    self.model.Add(sum(aktif) <= 1)
-
-        print("✓ Constraint Kelas selesai")
-
-        # =====================================================
-        # HARD CONSTRAINT
-        # SATU GURU SATU KELAS
-        # =====================================================
-
-        print("Memasang Hard Constraint Guru")
-
+        # Rule 3: Satu Guru tidak boleh mengajar > 1 kelas di jam yang sama
         for guru in self.list_guru:
-
-            data_guru = self.mengajar[
-                self.mengajar["ID_Guru"] == guru
-            ]
-
+            tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
-
                 for jam in self.jam_per_hari[hari]:
+                    self.model.Add(
+                        sum(self.variables[(t_id, hari, jam)] for t_id in tugas_guru) <= 1
+                    )
 
-                    aktif = []
+        # Rule 4: Aturan Blok Jam Berurutan (No Gap didalam internal blok mapel)
+        for t in self.tugas_mengajar:
+            t_id = t["id_tugas"]
+            target_jp = t["jp"]
+            if target_jp > 1:
+                for hari in self.list_hari:
+                    jam_hari = self.jam_per_hari[hari]
+                    
+                    # Logika sliding window untuk mengunci kedekatan jam pembelajaran
+                    start_vars = []
+                    for i in range(len(jam_hari) - target_jp + 1):
+                        s_var = self.model.NewBoolVar(f"start_{t_id}_{hari}_{jam_hari[i]}")
+                        start_vars.append(s_var)
+                        
+                        # Jika jendela ini dipilih, seluruh jam di range ini bernilai 1
+                        for offset in range(target_jp):
+                            self.model.Add(self.variables[(t_id, hari, jam_hari[i+offset])] == 1).OnlyEnforceIf(s_var)
+                    
+                    # Sub-tugas aktif di hari ini jika dan hanya jika salah satu jendela start dipilih
+                    self.model.Add(sum(start_vars) == tugas_hari_aktif[(t_id, hari)])
 
-                    for _, row in data_guru.iterrows():
-
-                        aktif.append(
-                            self.variables[
-                                (
-                                    guru,
-                                    row["ID_Rombel"],
-                                    row["ID_Mapel"],
-                                    hari,
-                                    jam
-                                )
-                            ]
-                        )
-
-                    self.model.Add(sum(aktif) <= 1)
-
-        print("✓ Constraint Guru selesai")
-
-        # =====================================================
-        # HARD CONSTRAINT
-        # MAPEL PRIORITAS PAGI
-        # =====================================================
-
-        print("Memasang Prioritas Mapel Pagi")
-
-        for (guru, rombel, mapel, hari, jam), var in self.variables.items():
-
-            if mapel not in self.mapel_prioritas_pagi:
-                continue
-
-            if jam >= 5:
-                self.model.Add(var == 0)
-
-        print("✓ Prioritas Mapel selesai")
-
-        # =====================================================
-        # HARD CONSTRAINT
-        # PJOK
-        # =====================================================
-
-        print("Memasang Constraint PJOK")
-
-        pjok_rows = self.mengajar[
-            self.mengajar["ID_Mapel"].isin(self.mapel_pjok)
-        ].copy()
-
-        pjok_rows = pjok_rows.sort_values("ID_Rombel")
-
-        rombel_pagi = set(
-            pjok_rows["ID_Rombel"].unique()[:10]
-        )
-
-        rombel_siang = set(
-            pjok_rows["ID_Rombel"].unique()[10:]
-        )
-
-        print("PJOK PAGI :", sorted(rombel_pagi))
-        print("PJOK SIANG:", sorted(rombel_siang))
-
-        for (guru, rombel, mapel, hari, jam), var in self.variables.items():
-
-            if mapel not in self.mapel_pjok:
-                continue
-
-            if jam > 6:
-                self.model.Add(var == 0)
-
-            if rombel in rombel_pagi:
-
-                if str(hari).upper() == "SENIN":
-
-                    if jam not in [2, 3, 4]:
-                        self.model.Add(var == 0)
-
-                else:
-
-                    if jam not in [1, 2, 3]:
-                        self.model.Add(var == 0)
-
-            elif rombel in rombel_siang:
-
-                if jam not in [4, 5, 6]:
-                    self.model.Add(var == 0)
-
-        print("✓ Constraint PJOK selesai")
-
-        # =====================================================
-        # PJOK HARUS BERURUTAN
-        # =====================================================
-
-        print("Memasang Constraint Blok PJOK")
-
-        for _, row in pjok_rows.iterrows():
-
-            guru = row["ID_Guru"]
-            rombel = row["ID_Rombel"]
-            mapel = row["ID_Mapel"]
-
-            target_jp = int(row[self.scheduler.col_jp])
-
-            if target_jp <= 1:
-                continue
-
+        # Rule 5: Aturan Jam Khusus PJOK (M11) & Shift Mengajar
+        for t in self.tugas_mengajar:
+            t_id = t["id_tugas"]
+            mapel = t["mapel"]
+            
             for hari in self.list_hari:
-
-                daftar = []
-
                 for jam in self.jam_per_hari[hari]:
-
-                    daftar.append(
-                        self.variables[
-                            (
-                                guru,
-                                rombel,
-                                mapel,
-                                hari,
-                                jam
-                            )
-                        ]
-                    )
-
-                self.model.Add(sum(daftar) <= target_jp)
-
-        print("✓ Blok PJOK selesai")
+                    # Kondisi PJOK (Maksimal jam ke-6)
+                    if mapel in self.mapel_pjok and jam > 6:
+                        self.model.Add(self.variables[(t_id, hari, jam)] == 0)
+                        
+                    # Kondisi Shift Pagi Utama (Maksimal jam ke-6)
+                    elif mapel in self.mapel_prioritas_pagi and jam > 6:
+                        self.model.Add(self.variables[(t_id, hari, jam)] == 0)
+                        
+                    # Kondisi Shift Siang Utama (Hanya boleh jam 5 ke atas)
+                    elif mapel in self.mapel_prioritas_siang and jam < 5:
+                        self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
         # =====================================================
-        # HARD CONSTRAINT
-        # BLOK JP BERURUTAN
+        # SOLVING PROSES
         # =====================================================
-
-        print("Memasang Constraint Blok Jam Berurutan")
-
-        for _, row in self.mengajar.iterrows():
-
-            guru = row["ID_Guru"]
-            rombel = row["ID_Rombel"]
-            mapel = row["ID_Mapel"]
-
-            target_jp = int(row[self.scheduler.col_jp])
-
-            if target_jp <= 1:
-                continue
-
-            for hari in self.list_hari:
-
-                jam_hari = sorted(self.jam_per_hari[hari])
-
-                start_block = {}
-
-                for awal in jam_hari:
-
-                    if awal + target_jp - 1 > max(jam_hari):
-                        continue
-
-                    start_block[awal] = self.model.NewBoolVar(
-                        f"start_{guru}_{rombel}_{mapel}_{hari}_{awal}"
-                    )
-
-                if start_block:
-                    self.model.Add(
-                        sum(start_block.values()) <= 1
-                    )
-
-                for awal, start_var in start_block.items():
-
-                    for offset in range(target_jp):
-
-                        jam = awal + offset
-
-                        self.model.Add(
-                            self.variables[
-                                (
-                                    guru,
-                                    rombel,
-                                    mapel,
-                                    hari,
-                                    jam
-                                )
-                            ] == 1
-                        ).OnlyEnforceIf(start_var)
-
-                semua_start = list(start_block.values())
-
-                if semua_start:
-
-                    for jam in jam_hari:
-
-                        kandidat = []
-
-                        for awal, start_var in start_block.items():
-
-                            if awal <= jam <= awal + target_jp - 1:
-                                kandidat.append(start_var)
-
-                        if kandidat:
-                            self.model.Add(
-                                self.variables[
-                                    (
-                                        guru,
-                                        rombel,
-                                        mapel,
-                                        hari,
-                                        jam
-                                    )
-                                ]
-                                <= sum(kandidat)
-                            )
-
-        print("✓ Constraint Blok Jam selesai")
-
-        # =====================================================
-        # HARD CONSTRAINT
-        # MAPEL HANYA SATU BLOK DALAM SATU HARI
-        # =====================================================
-
-        print("Memasang Constraint Satu Blok Per Hari")
-
-        for _, row in self.mengajar.iterrows():
-
-            guru = row["ID_Guru"]
-            rombel = row["ID_Rombel"]
-            mapel = row["ID_Mapel"]
-
-            target_jp = int(row[self.scheduler.col_jp])
-
-            for hari in self.list_hari:
-
-                vars_hari = [
-                    self.variables[
-                        (
-                            guru,
-                            rombel,
-                            mapel,
-                            hari,
-                            jam
-                        )
-                    ]
-                    for jam in self.jam_per_hari[hari]
-                ]
-
-                self.model.Add(
-                    sum(vars_hari) <= target_jp
-                )
-
-        print("✓ Constraint Satu Blok selesai")
-
-        # =====================================================
-        # HARD CONSTRAINT
-        # TIDAK BOLEH ADA GAP
-        # =====================================================
-
-        print("Memasang Constraint No Gap")
-
-        for _, row in self.mengajar.iterrows():
-
-            guru = row["ID_Guru"]
-            rombel = row["ID_Rombel"]
-            mapel = row["ID_Mapel"]
-
-            for hari in self.list_hari:
-
-                jam_hari = sorted(self.jam_per_hari[hari])
-
-                if len(jam_hari) < 3:
-                    continue
-
-                for i in range(1, len(jam_hari)-1):
-
-                    kiri = jam_hari[i-1]
-                    tengah = jam_hari[i]
-                    kanan = jam_hari[i+1]
-
-                    self.model.Add(
-                        self.variables[
-                            (
-                                guru,
-                                rombel,
-                                mapel,
-                                hari,
-                                kiri
-                            )
-                        ]
-                        +
-                        self.variables[
-                            (
-                                guru,
-                                rombel,
-                                mapel,
-                                hari,
-                                kanan
-                            )
-                        ]
-                        -
-                        self.variables[
-                            (
-                                guru,
-                                rombel,
-                                mapel,
-                                hari,
-                                tengah
-                            )
-                        ]
-                        <= 1
-                    )
-
-        print("✓ Constraint No Gap selesai")
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = timeout_seconds
+        
+        status = solver.Solve(self.model)
+        
+        if status == cp_model.OPTIMAL or status == cp_model.FEASIBLE:
+            print("✓ HORE! AI berhasil menemukan solusi jadwal yang valid!")
+            # Proses konversi self.variables menjadi DataFrame output dapat ditaruh disini
+            return True
+        else:
+            print("× AI tetap tidak menemukan solusi. Periksa batasan ruang / total jam guru.")
+            return False
