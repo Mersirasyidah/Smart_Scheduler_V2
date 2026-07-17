@@ -180,8 +180,8 @@ class SchedulerSolver:
                 t = tugas_lookup[t_id]
                 rows.append({
                     "Hari": hari,
-                    "Jam_Ke": jam, # <-- DIUBAH DI SINI (Sebelumnya "Jam")
-                    "Kelas": t["rombel"],
+                    "Jam_Ke": jam, 
+                    "ID_Rombel": t["rombel"], # <-- DIUBAH DI SINI (Sebelumnya "Kelas")
                     "ID_Guru": t["guru"],
                     "Nama_Guru": guru_dict.get(t["guru"], "Unknown"),
                     "ID_Mapel": t["mapel"],
@@ -190,8 +190,8 @@ class SchedulerSolver:
 
         df_hasil = pd.DataFrame(rows)
         
-        # Urutkan secara rapi berdasarkan Hari, Kelas, dan Jam_Ke
+        # Urutkan secara rapi berdasarkan Hari, ID_Rombel, dan Jam_Ke
         if not df_hasil.empty:
-            df_hasil = df_hasil.sort_values(by=["Hari", "Kelas", "Jam_Ke"]).reset_index(drop=True) # <-- DIUBAH DI SINI
+            df_hasil = df_hasil.sort_values(by=["Hari", "ID_Rombel", "Jam_Ke"]).reset_index(drop=True) # <-- DIUBAH DI SINI
             
         return df_hasil
