@@ -164,14 +164,11 @@ class SchedulerSolver:
             return False
 
     def extract_results(self):
-        """Mengekstrak variabel keputusan OR-Tools menjadi DataFrame output"""
+        """Mengekstrak variabel keputusan OR-Tools menjadi DataFrame output mentah (hanya ID)"""
         if self.solver is None:
             return pd.DataFrame()
 
         rows = []
-        guru_dict = dict(zip(self.guru['ID_Guru'], self.guru['Nama_Guru']))
-        mapel_dict = dict(zip(self.mapel['ID_Mapel'], self.mapel['Nama_Mapel']))
-
         # Mapping data sub-tugas berdasarkan id_tugas agar pemanggilan cepat
         tugas_lookup = {t["id_tugas"]: t for t in self.tugas_mengajar}
 
@@ -181,17 +178,15 @@ class SchedulerSolver:
                 rows.append({
                     "Hari": hari,
                     "Jam_Ke": jam, 
-                    "ID_Rombel": t["rombel"], # <-- DIUBAH DI SINI (Sebelumnya "Kelas")
+                    "ID_Rombel": t["rombel"], 
                     "ID_Guru": t["guru"],
-                    "Nama_Guru": guru_dict.get(t["guru"], "Unknown"),
-                    "ID_Mapel": t["mapel"],
-                    "Nama_Mapel": mapel_dict.get(t["mapel"], "Unknown"),
+                    "ID_Mapel": t["mapel"]
                 })
 
         df_hasil = pd.DataFrame(rows)
         
         # Urutkan secara rapi berdasarkan Hari, ID_Rombel, dan Jam_Ke
         if not df_hasil.empty:
-            df_hasil = df_hasil.sort_values(by=["Hari", "ID_Rombel", "Jam_Ke"]).reset_index(drop=True) # <-- DIUBAH DI SINI
+            df_hasil = df_hasil.sort_values(by=["Hari", "ID_Rombel", "Jam_Ke"]).reset_index(drop=True)
             
         return df_hasil
