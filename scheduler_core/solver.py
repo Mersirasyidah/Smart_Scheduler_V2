@@ -37,11 +37,9 @@ class SchedulerSolver:
         for hari in self.list_hari:
 
             self.jam_per_hari[hari] = sorted(
-
                 self.slot[
                     self.slot["Hari"] == hari
                 ]["Jam_Ke"].tolist()
-
             )
 
         # =====================================================
@@ -49,9 +47,7 @@ class SchedulerSolver:
         # =====================================================
 
         self.variables = {}
-
         self.is_active_day = {}
-
         self.penalties = []
 
         # =====================================================
@@ -59,64 +55,55 @@ class SchedulerSolver:
         # =====================================================
 
         self.mapel_prioritas_pagi = set()
-
         self.mapel_pjok = set()
-
         self.mapel_prioritas_siang = set()
-
         self.mapel_normal = set()
 
         # =====================================================
-        # MEMBACA KATEGORI DARI EXCEL
+        # MEMBACA KATEGORI DARI EXCEL & DETEKSI OTOMATIS
         # =====================================================
 
         if "Kategori" in self.mapel.columns:
-
             for _, row in self.mapel.iterrows():
-
                 kategori = str(row["Kategori"]).strip().upper()
+                kode = str(row["ID_Mapel"]).strip().upper()
 
-                kode = row["ID_Mapel"]
-
-                if kategori == "PRIORITAS_PAGI":
-
-                    self.mapel_prioritas_pagi.add(kode)
-
-                elif kategori == "PJOK":
-
-                    self.mapel_pjok.add(kode)
-
+                # Pengecekan eksplisit untuk kode M11 sebagai PJOK
+                if kode == "M11" or kategori == "PJOK":
+                    self.mapel_pjok.add(row["ID_Mapel"])
+                elif kategori == "PRIORITAS_PAGI":
+                    self.mapel_prioritas_pagi.add(row["ID_Mapel"])
                 elif kategori == "SIANG":
-
-                    self.mapel_prioritas_siang.add(kode)
-
+                    self.mapel_prioritas_siang.add(row["ID_Mapel"])
                 else:
-
-                    self.mapel_normal.add(kode)
-
+                    self.mapel_normal.add(row["ID_Mapel"])
         else:
-
             # =================================================
-            # FALLBACK OTOMATIS BERDASARKAN NAMA MAPEL
+            # FALLBACK OTOMATIS BERDASARKAN KODE / NAMA MAPEL
             # =================================================
-
             for _, row in self.mapel.iterrows():
-
-                kode = str(row["ID_Mapel"]).upper()
-
+                kode = str(row["ID_Mapel"]).strip().upper()
                 nama = ""
-
                 if "Nama_Mapel" in self.mapel.columns:
-                    nama = str(row["Nama_Mapel"]).upper()
+                    nama = str(row["Nama_Mapel"]).strip().upper()
 
                 teks = kode + " " + nama
 
                 # ================================
+                # PJOK (M11 didahulukan)
+                # ================================
+                if (
+                    kode == "M11" 
+                    or "PJOK" in teks 
+                    or "PENJAS" in teks 
+                    or "PENYAS" in teks
+                ):
+                    self.mapel_pjok.add(row["ID_Mapel"])
+
+                # ================================
                 # PRIORITAS PAGI
                 # ================================
-
-                if (
-
+                elif (
                     "MAT" in teks
                     or "MATEMATIKA" in teks
                     or "IPA" in teks
@@ -124,42 +111,21 @@ class SchedulerSolver:
                     or "INDONESIA" in teks
                     or "BAHASA INGGRIS" in teks
                     or "INGGRIS" in teks
-
                 ):
-
                     self.mapel_prioritas_pagi.add(row["ID_Mapel"])
-
-                # ================================
-                # PJOK
-                # ================================
-
-                elif (
-
-                    "PJOK" in teks
-                    or "PENJAS" in teks
-                    or "PENYAS" in teks
-
-                ):
-
-                    self.mapel_pjok.add(row["ID_Mapel"])
 
                 # ================================
                 # SIANG
                 # ================================
-
                 elif (
-
                     "PRAKARYA" in teks
                     or "SENI" in teks
                     or "SBK" in teks
                     or "BAHASA JAWA" in teks
-
                 ):
-
                     self.mapel_prioritas_siang.add(row["ID_Mapel"])
 
                 else:
-
                     self.mapel_normal.add(row["ID_Mapel"])
 
         # =====================================================
@@ -167,26 +133,19 @@ class SchedulerSolver:
         # =====================================================
 
         print("=" * 60)
-
         print("MAPEL PRIORITAS PAGI")
         print(sorted(self.mapel_prioritas_pagi))
-
         print()
-
         print("MAPEL PJOK")
         print(sorted(self.mapel_pjok))
-
         print()
-
         print("MAPEL PRIORITAS SIANG")
         print(sorted(self.mapel_prioritas_siang))
-
         print()
-
         print("MAPEL NORMAL")
         print(sorted(self.mapel_normal))
-
         print("=" * 60)
+
     # =====================================================
     # RUN SOLVER
     # =====================================================
@@ -212,37 +171,23 @@ class SchedulerSolver:
                 for jam in self.jam_per_hari[hari]:
 
                     self.variables[(guru, rombel, mapel, hari, jam)] = (
-
                         self.model.NewBoolVar(
-
                             f"x_{guru}_{rombel}_{mapel}_{hari}_{jam}"
-
                         )
-
                     )
 
                 self.is_active_day[(guru, rombel, mapel, hari)] = (
-
                     self.model.NewBoolVar(
-
                         f"aktif_{guru}_{rombel}_{mapel}_{hari}"
-
                     )
-
                 )
 
                 self.model.AddMaxEquality(
-
                     self.is_active_day[(guru, rombel, mapel, hari)],
-
                     [
-
                         self.variables[(guru, rombel, mapel, hari, jam)]
-
                         for jam in self.jam_per_hari[hari]
-
                     ]
-
                 )
 
         print("✓ Variabel berhasil dibuat")
@@ -263,19 +208,12 @@ class SchedulerSolver:
             target_jp = int(row[self.scheduler.col_jp])
 
             self.model.Add(
-
                 sum(
-
                     self.variables[(guru, rombel, mapel, hari, jam)]
-
                     for hari in self.list_hari
-
                     for jam in self.jam_per_hari[hari]
-
                 )
-
                 == target_jp
-
             )
 
         print("✓ Total JP selesai")
@@ -290,9 +228,7 @@ class SchedulerSolver:
         for rombel in self.list_rombel:
 
             data_rombel = self.mengajar[
-
                 self.mengajar["ID_Rombel"] == rombel
-
             ]
 
             for hari in self.list_hari:
@@ -304,25 +240,15 @@ class SchedulerSolver:
                     for _, row in data_rombel.iterrows():
 
                         aktif.append(
-
                             self.variables[
-
                                 (
-
                                     row["ID_Guru"],
-
                                     rombel,
-
                                     row["ID_Mapel"],
-
                                     hari,
-
                                     jam
-
                                 )
-
                             ]
-
                         )
 
                     self.model.Add(sum(aktif) <= 1)
@@ -339,9 +265,7 @@ class SchedulerSolver:
         for guru in self.list_guru:
 
             data_guru = self.mengajar[
-
                 self.mengajar["ID_Guru"] == guru
-
             ]
 
             for hari in self.list_hari:
@@ -353,32 +277,18 @@ class SchedulerSolver:
                     for _, row in data_guru.iterrows():
 
                         aktif.append(
-
                             self.variables[
-
                                 (
-
                                     guru,
-
                                     row["ID_Rombel"],
-
                                     row["ID_Mapel"],
-
                                     hari,
-
                                     jam
-
                                 )
-
                             ]
-
                         )
 
-                    self.model.Add(
-
-                        sum(aktif) <= 1
-
-                    )
+                    self.model.Add(sum(aktif) <= 1)
 
         print("✓ Constraint Guru selesai")
 
@@ -395,7 +305,6 @@ class SchedulerSolver:
                 continue
 
             if jam >= 5:
-
                 self.model.Add(var == 0)
 
         print("✓ Prioritas Mapel selesai")
@@ -407,27 +316,15 @@ class SchedulerSolver:
 
         print("Memasang Constraint PJOK")
 
-        # ------------------------------------------
-        # Ambil seluruh rombel yang memiliki PJOK
-        # ------------------------------------------
-
         pjok_rows = self.mengajar[
             self.mengajar["ID_Mapel"].isin(self.mapel_pjok)
         ].copy()
 
         pjok_rows = pjok_rows.sort_values("ID_Rombel")
 
-        # ------------------------------------------
-        # 10 rombel pertama = kelompok pagi
-        # ------------------------------------------
-
         rombel_pagi = set(
             pjok_rows["ID_Rombel"].unique()[:10]
         )
-
-        # ------------------------------------------
-        # sisanya = kelompok siang
-        # ------------------------------------------
 
         rombel_siang = set(
             pjok_rows["ID_Rombel"].unique()[10:]
@@ -436,56 +333,29 @@ class SchedulerSolver:
         print("PJOK PAGI :", sorted(rombel_pagi))
         print("PJOK SIANG:", sorted(rombel_siang))
 
-        # =====================================================
-        # PASANG ATURAN PJOK
-        # =====================================================
-
         for (guru, rombel, mapel, hari, jam), var in self.variables.items():
 
             if mapel not in self.mapel_pjok:
                 continue
 
-            # --------------------------------------
-            # Tidak boleh di atas jam 6
-            # --------------------------------------
-
             if jam > 6:
-
                 self.model.Add(var == 0)
-
-            # --------------------------------------
-            # Kelompok PAGI
-            # --------------------------------------
 
             if rombel in rombel_pagi:
 
                 if str(hari).upper() == "SENIN":
 
-                    # hanya boleh 2-4
-
-                    if jam not in [2,3,4]:
-
+                    if jam not in [2, 3, 4]:
                         self.model.Add(var == 0)
 
                 else:
 
-                    # Selasa-Jumat
-                    # hanya boleh 1-3
-
-                    if jam not in [1,2,3]:
-
+                    if jam not in [1, 2, 3]:
                         self.model.Add(var == 0)
-
-            # --------------------------------------
-            # Kelompok SIANG
-            # --------------------------------------
 
             elif rombel in rombel_siang:
 
-                # semua hari hanya boleh 4-6
-
-                if jam not in [4,5,6]:
-
+                if jam not in [4, 5, 6]:
                     self.model.Add(var == 0)
 
         print("✓ Constraint PJOK selesai")
@@ -514,7 +384,6 @@ class SchedulerSolver:
                 for jam in self.jam_per_hari[hari]:
 
                     daftar.append(
-
                         self.variables[
                             (
                                 guru,
@@ -524,10 +393,7 @@ class SchedulerSolver:
                                 jam
                             )
                         ]
-
                     )
-
-                # Maksimal satu blok PJOK setiap hari
 
                 self.model.Add(sum(daftar) <= target_jp)
 
@@ -548,20 +414,12 @@ class SchedulerSolver:
 
             target_jp = int(row[self.scheduler.col_jp])
 
-            # -----------------------------------------
-            # Tidak perlu jika hanya 1 JP
-            # -----------------------------------------
-
             if target_jp <= 1:
                 continue
 
             for hari in self.list_hari:
 
                 jam_hari = sorted(self.jam_per_hari[hari])
-
-                # -----------------------------------------
-                # Variabel awal blok
-                # -----------------------------------------
 
                 start_block = {}
 
@@ -571,27 +429,13 @@ class SchedulerSolver:
                         continue
 
                     start_block[awal] = self.model.NewBoolVar(
-
                         f"start_{guru}_{rombel}_{mapel}_{hari}_{awal}"
-
                     )
-
-                # -----------------------------------------
-                # Maksimal satu blok pada hari tersebut
-                # -----------------------------------------
 
                 if start_block:
-
                     self.model.Add(
-
                         sum(start_block.values()) <= 1
-
                     )
-
-                # -----------------------------------------
-                # Jika blok dimulai di jam tertentu
-                # maka seluruh JP harus aktif
-                # -----------------------------------------
 
                 for awal, start_var in start_block.items():
 
@@ -600,7 +444,6 @@ class SchedulerSolver:
                         jam = awal + offset
 
                         self.model.Add(
-
                             self.variables[
                                 (
                                     guru,
@@ -610,13 +453,7 @@ class SchedulerSolver:
                                     jam
                                 )
                             ] == 1
-
                         ).OnlyEnforceIf(start_var)
-
-                # -----------------------------------------
-                # Jika start tidak dipilih
-                # maka semua jam tersebut bebas
-                # -----------------------------------------
 
                 semua_start = list(start_block.values())
 
@@ -629,13 +466,10 @@ class SchedulerSolver:
                         for awal, start_var in start_block.items():
 
                             if awal <= jam <= awal + target_jp - 1:
-
                                 kandidat.append(start_var)
 
                         if kandidat:
-
                             self.model.Add(
-
                                 self.variables[
                                     (
                                         guru,
@@ -645,11 +479,7 @@ class SchedulerSolver:
                                         jam
                                     )
                                 ]
-
-                                <=
-
-                                sum(kandidat)
-
+                                <= sum(kandidat)
                             )
 
         print("✓ Constraint Blok Jam selesai")
@@ -672,7 +502,6 @@ class SchedulerSolver:
             for hari in self.list_hari:
 
                 vars_hari = [
-
                     self.variables[
                         (
                             guru,
@@ -682,15 +511,11 @@ class SchedulerSolver:
                             jam
                         )
                     ]
-
                     for jam in self.jam_per_hari[hari]
-
                 ]
 
                 self.model.Add(
-
                     sum(vars_hari) <= target_jp
-
                 )
 
         print("✓ Constraint Satu Blok selesai")
@@ -722,7 +547,6 @@ class SchedulerSolver:
                     kanan = jam_hari[i+1]
 
                     self.model.Add(
-
                         self.variables[
                             (
                                 guru,
@@ -732,9 +556,7 @@ class SchedulerSolver:
                                 kiri
                             )
                         ]
-
                         +
-
                         self.variables[
                             (
                                 guru,
@@ -744,9 +566,7 @@ class SchedulerSolver:
                                 kanan
                             )
                         ]
-
                         -
-
                         self.variables[
                             (
                                 guru,
@@ -756,11 +576,7 @@ class SchedulerSolver:
                                 tengah
                             )
                         ]
-
                         <= 1
-
                     )
 
         print("✓ Constraint No Gap selesai")
-
-
