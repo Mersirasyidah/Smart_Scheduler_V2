@@ -68,19 +68,11 @@ class SchedulerSolver:
                     })
                     tugas_id += 1
 
-        self.mapel_prioritas_pagi = set()
         self.mapel_pjok = set()
-        self.mapel_prioritas_siang = set()
-
         for _, row in self.mapel.iterrows():
             kode = str(row["ID_Mapel"]).strip().upper()
-            shift = str(row.get("Shift", "")).strip().upper()
             if kode == "M11" or "JASMANI" in str(row["Nama_Mapel"]).upper():
                 self.mapel_pjok.add(row["ID_Mapel"])
-            elif shift == "PAGI" or row.get("Prioritas", 3) == 1:
-                self.mapel_prioritas_pagi.add(row["ID_Mapel"])
-            elif shift == "SIANG":
-                self.mapel_prioritas_siang.add(row["ID_Mapel"])
 
         self.variables = {}
         self.penalties = []
@@ -118,18 +110,18 @@ class SchedulerSolver:
             # 2. Satu blok pecahan tugas hanya aktif di 1 HARI
             self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
 
-            # 3. Kunci Mutlak PJOK (M11): Dilarang di Jam > 6
+            # 3. KUNCI AGAMA (M01) KELAS 7A, 8A, 8C, 9A MUTLAK DI HARI KAMIS
+            if mapel == "M01" and rombel in ["7A", "8A", "8C", "9A"]:
+                self.model.Add(tugas_hari_aktif[(t_id, "Kamis")] == 1)
+
+            # 4. PJOK (M11) DILARANG DI JAM > 6
             if mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
-            # 4. KUNCI AGAMA (M01) KELAS 7A, 8A, 8C, 9A HANYA PADA HARI KAMIS
-            if mapel == "M01" and rombel in ["7A", "8A", "8C", "9A"]:
-                self.model.Add(tugas_hari_aktif[(t_id, "Kamis")] == 1)
-
-        # 5. BATASAN JUMLAH MAPEL PER HARI (MINIMAL 3, MAKSIMAL 4 MAPEL)
+        # 5. MAKSIMAL 4 MAPEL PER HARI PER ROMBEL
         for rombel in self.list_rombel:
             for hari in self.list_hari:
                 mapel_aktif_hari = []
@@ -142,9 +134,8 @@ class SchedulerSolver:
                 
                 if mapel_aktif_hari:
                     self.model.Add(sum(mapel_aktif_hari) <= 4)
-                    self.model.Add(sum(mapel_aktif_hari) >= 3)
 
-        # 6. DILARANG LEBIH DARI 1 PERTEMUAN MAPEL YANG SAMA PADA HARI YANG SAMA
+        # 6. DILARANG LEBIH DARI 1 PERTEMUAN MAPEL YANG SAMA PER HARI
         for rombel in self.list_rombel:
             for mapel in self.list_mapel:
                 tugas_sama = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel and t["mapel"] == mapel]
@@ -182,39 +173,29 @@ class SchedulerSolver:
                     self.model.Add(sum(start_vars) == tugas_hari_aktif[(t_id, hari)])
 
         # =====================================================
-        # SOFT CONSTRAINTS (Sistem Denda Prioritas Jam Pagi)
+        # SOFT CONSTRAINTS (Prioritas Jam Pagi PJOK)
         # =====================================================
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
-                    
-                    # PJOK (M11) Fokus Jam 1 - 3
-                    if mapel in self.mapel_pjok:
-                        if jam > 3:
-                            self.penalties.append(self.variables[(t_id, hari, jam)] * 500)
-                        
-                    # Mapel Pagi Utama / M09
-                    elif mapel in self.mapel_prioritas_pagi or mapel == "M09":
-                        if jam > 6:
-                            self.penalties.append(self.variables[(t_id, hari, jam)] * 100)
-                        
-                    # Mapel Siang
-                    elif mapel in self.mapel_prioritas_siang and jam < 5:
-                        self.penalties.append(self.variables[(t_id, hari, jam)] * 50)
+                    # DORONG PJOK (M11) KE JAM 1 - 3
+                    if mapel in self.mapel_pjok and jam > 3:
+                        self.penalties.append(self.variables[(t_id, hari, jam)] * 500)
 
         self.model.Minimize(sum(self.penalties))
 
         self.solver = cp_model.CpSolver()
         self.solver.parameters.max_time_in_seconds = timeout_seconds
+        self.solver.parameters.num_search_workers = 4
         status = self.solver.Solve(self.model)
         
         if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-            print("✓ BERHASIL: M01 kelas 7A, 8A, 8C, 9A terkunci penuh di Hari Kamis!")
+            print("✓ BERHASIL: Solusi jadwal optimal berhasil ditemukan!")
             return True
         else:
-            print("× GAGAL: Tidak menemukan solusi.")
+            print("× GAGAL: Solusi tidak ditemukan.")
             return False
 
     def extract_results(self):
