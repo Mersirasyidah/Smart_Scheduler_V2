@@ -9,7 +9,7 @@ class SchedulerSolver:
         self.model = cp_model.CpModel()
         self.solver = None
 
-        # Standardisasi Data & Logika Solver
+        # Standardisasi Data
         self.guru = scheduler.guru.copy()
         self.rombel = scheduler.rombel.copy()
         self.mengajar = scheduler.mengajar.copy()
@@ -45,10 +45,10 @@ class SchedulerSolver:
         )
 
         for _, row in self.mengajar.iterrows():
-            guru = str(row["ID_Guru"])
-            rombel = str(row["Kelas"]) if "Kelas" in self.mengajar.columns else str(row["ID_Rombel"])
+            guru = str(row["ID_Guru"]).strip()
+            rombel = str(row["Kelas"]).strip() if "Kelas" in self.mengajar.columns else str(row["ID_Rombel"]).strip()
             mapel_nama = str(row["Mapel"]).strip().upper()
-            mapel_id = mapel_mapping.get(mapel_nama, str(row.get("ID_Mapel", "M99")))
+            mapel_id = mapel_mapping.get(mapel_nama, str(row.get("ID_Mapel", "M99")).strip())
 
             pembagian_str = str(row["Pembagian"]).strip()
             if "," in pembagian_str:
@@ -76,19 +76,43 @@ class SchedulerSolver:
         for _, row in self.mapel.iterrows():
             kode = str(row["ID_Mapel"]).strip().upper()
             if kode == "M11" or "JASMANI" in str(row["Nama_Mapel"]).upper():
-                self.mapel_pjok.add(str(row["ID_Mapel"]))
+                self.mapel_pjok.add(str(row["ID_Mapel"]).strip())
 
-        # Status Guru (GTT vs Non-GTT) & Mapping Hari MGMP
+        # -------------------------------------------------------------
+        # DETEKSI STATUS GURU & HARI MGMP (GURU & MAPEL)
+        # -------------------------------------------------------------
         self.guru_gtt_set = set()
-        if "Status" in self.guru.columns:
-            for _, row in self.guru.iterrows():
-                if "GTT" in str(row["Status"]).upper():
-                    self.guru_gtt_set.add(str(row["ID_Guru"]))
+        self.guru_mgmp_dict = {}  # {ID_Guru: Hari_MGMP}
+
+        # Cek dari Sheet Guru
+        for _, row in self.guru.iterrows():
+            g_id = str(row["ID_Guru"]).strip()
+            
+            # Cek status GTT
+            status_str = ""
+            for col in ["Status", "Kategori", "Status_Guru", "Jenis_Guru"]:
+                if col in row and pd.notna(row[col]):
+                    status_str += " " + str(row[col]).upper()
+            
+            if "GTT" in status_str or "HONOR" in status_str:
+                self.guru_gtt_set.add(g_id)
+
+            # Cek jika ada Hari_MGMP langsung di Sheet Guru
+            if "Hari_MGMP" in row and pd.notna(row["Hari_MGMP"]):
+                self.guru_mgmp_dict[g_id] = str(row["Hari_MGMP"]).strip()
+
+        # Cek dari Sheet Mapel
+        self.mapel_mgmp_dict = {}
+        if "Hari_MGMP" in self.mapel.columns:
+            for _, row in self.mapel.iterrows():
+                if pd.notna(row["Hari_MGMP"]):
+                    m_id = str(row["ID_Mapel"]).strip()
+                    self.mapel_mgmp_dict[m_id] = str(row["Hari_MGMP"]).strip()
 
         self.variables = {}
         self.penalties = []
 
-    def run_solver(self, timeout_seconds=120, max_jam_mgmp=4):
+    def run_solver(self, timeout_seconds=120, max_jam_mgmp_nongtt=3):
         # Inisialisasi Variabel Utama
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
@@ -111,7 +135,6 @@ class SchedulerSolver:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
             rombel = t["rombel"]
-            guru = t["guru"]
 
             # Total jam mengajar harus sama dengan JP
             self.model.Add(
@@ -134,35 +157,29 @@ class SchedulerSolver:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
         # -------------------------------------------------------------
-        # CONSTRAINT BARU: ATURAN HARI MGMP
+        # PENGETATAN ATURAN MGMP (KHUSUS PER-GURU ATAU PER-MAPEL)
         # -------------------------------------------------------------
-        # Cek apakah ada kolom Hari_MGMP di sheet Mapel/Guru atau parameter hari MGMP
-        # Menyesuaikan mapping hari MGMP dari dataframe Mapel jika ada kolom 'Hari_MGMP'
-        mapel_mgmp_dict = {}
-        if "Hari_MGMP" in self.mapel.columns:
-            for _, row in self.mapel.iterrows():
-                if pd.notna(row["Hari_MGMP"]):
-                    mapel_mgmp_dict[str(row["ID_Mapel"])] = str(row["Hari_MGMP"]).strip()
-
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             guru = t["guru"]
             mapel = t["mapel"]
-            
-            hari_mgmp = mapel_mgmp_dict.get(mapel)
-            
-            if hari_mgmp:
-                # Cari penulisan nama hari yang cocok di slot jam
-                hari_mgmp_match = next((h for h in self.list_hari if h.strip().lower() == hari_mgmp.lower()), None)
-                
+
+            # Ambil hari MGMP dari dict Guru atau Mapel
+            hari_mgmp_str = self.guru_mgmp_dict.get(guru) or self.mapel_mgmp_dict.get(mapel)
+
+            if hari_mgmp_str:
+                # Cari penulisan hari yang cocok di daftar hari slot (case-insensitive)
+                hari_mgmp_match = next((h for h in self.list_hari if h.strip().lower() == hari_mgmp_str.lower()), None)
+
                 if hari_mgmp_match:
+                    # ATURAN 1: GTT (Termasuk G33 / G26 jika GTT) -> SAMA SEKALI TIDAK BOLEH MENGAJAR
                     if guru in self.guru_gtt_set:
-                        # GTT Libur total di hari MGMP mapelnya
                         self.model.Add(tugas_hari_aktif[(t_id, hari_mgmp_match)] == 0)
+                    
+                    # ATURAN 2: NON-GTT -> Hanya Boleh Mengajar Jam 1 s/d max_jam_mgmp_nongtt (misal jam 3/4)
                     else:
-                        # Guru Non-GTT hanya boleh mengajar sampai jam ke-max_jam_mgmp (misal jam ke-4)
                         for jam in self.jam_per_hari[hari_mgmp_match]:
-                            if jam > max_jam_mgmp:
+                            if jam > max_jam_mgmp_nongtt:
                                 self.model.Add(self.variables[(t_id, hari_mgmp_match, jam)] == 0)
 
         # Maksimal 5 Mapel per Hari per Rombel
