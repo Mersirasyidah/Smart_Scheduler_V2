@@ -104,7 +104,7 @@ class SchedulerSolver:
                 )
 
         # =====================================================
-        # HARD CONSTRAINTS (Aturan Wajib)
+        # HARD CONSTRAINTS (Aturan Mutlak)
         # =====================================================
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
@@ -117,37 +117,53 @@ class SchedulerSolver:
             # 2. Satu blok pecahan tugas hanya aktif di 1 HARI
             self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
 
-            # 3. KUNCI MUTLAK M11 (PJOK): DILARANG KERAS DI JAM > 6
+            # 3. KUNCI MUTLAK PJOK (M11): DILARANG KERAS DI JAM > 6
             if mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
-        # 4. PERBAIKAN M09/M06: DILARANG LEBIH DARI 1 PERTEMUAN MAPEL YANG SAMA PADA HARI YANG SAMA
+        # 4. BATASAN JUMLAH MAPEL PER HARI (MINIMAL 3, MAKSIMAL 4 MAPEL)
+        for rombel in self.list_rombel:
+            for hari in self.list_hari:
+                mapel_aktif_hari = []
+                for mapel in self.list_mapel:
+                    tugas_mapel = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel and t["mapel"] == mapel]
+                    if tugas_mapel:
+                        is_active = self.model.NewBoolVar(f"active_{rombel}_{mapel}_{hari}")
+                        self.model.AddMaxEquality(is_active, [tugas_hari_aktif[(t_id, hari)] for t_id in tugas_mapel])
+                        mapel_aktif_hari.append(is_active)
+                
+                if mapel_aktif_hari:
+                    # Maksimal 4 mapel per hari
+                    self.model.Add(sum(mapel_aktif_hari) <= 4)
+                    # Minimal 3 mapel per hari
+                    self.model.Add(sum(mapel_aktif_hari) >= 3)
+
+        # 5. DILARANG LEBIH DARI 1 PERTEMUAN MAPEL YANG SAMA PADA HARI YANG SAMA
         for rombel in self.list_rombel:
             for mapel in self.list_mapel:
                 tugas_sama = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel and t["mapel"] == mapel]
                 if len(tugas_sama) > 1:
                     for hari in self.list_hari:
-                        # Maksimal hanya 1 pecahan tugas dari mapel ini yang boleh aktif di hari tersebut
                         self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for t_id in tugas_sama) <= 1)
 
-        # 5. Batasan Konflik Rombel (1 Kelas 1 Jam Pelajaran)
+        # 6. Batasan Konflik Rombel (1 Kelas 1 Jam Pelajaran)
         for rombel in self.list_rombel:
             tugas_rombel = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_rombel) <= 1)
 
-        # 6. Batasan Konflik Guru (1 Guru 1 Kelas pada Jam yang sama)
+        # 7. Batasan Konflik Guru (1 Guru 1 Kelas pada Jam yang sama)
         for guru in self.list_guru:
             tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_guru) <= 1)
 
-        # 7. Blok Jam Berurutan (Sliding Window) Tanpa Gap
+        # 8. Blok Jam Berurutan (Sliding Window) Tanpa Gap
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             target_jp = t["jp"]
@@ -171,12 +187,18 @@ class SchedulerSolver:
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     
-                    # Dorong M09 & Mapel Pagi Utama ke Jam 1 - 6
-                    if mapel in self.mapel_prioritas_pagi or mapel == "M09":
+                    # FOKUSKAN PJOK (M11) DI JAM 1 - 3
+                    if mapel in self.mapel_pjok:
+                        if jam > 3:
+                            # Berikan denda berat jika PJOK ditaruh di atas jam ke-3
+                            self.penalties.append(self.variables[(t_id, hari, jam)] * 500)
+                        
+                    # Mapel Pagi Utama di atas Jam ke-6
+                    elif mapel in self.mapel_prioritas_pagi or mapel == "M09":
                         if jam > 6:
                             self.penalties.append(self.variables[(t_id, hari, jam)] * 100)
                         
-                    # Mapel Siang idealnya di atas Jam ke-5
+                    # Mapel Siang di bawah Jam ke-5
                     elif mapel in self.mapel_prioritas_siang and jam < 5:
                         self.penalties.append(self.variables[(t_id, hari, jam)] * 50)
 
@@ -187,7 +209,7 @@ class SchedulerSolver:
         status = self.solver.Solve(self.model)
         
         if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
-            print("✓ BERHASIL: M09 terpisah 2,2,1 di 3 hari berbeda & M11 terkunci jam pagi!")
+            print("✓ BERHASIL: M11 diprioritaskan di jam 1-3 & Mapel per hari terkunci 3-4 mapel!")
             return True
         else:
             print("× GAGAL: Tidak menemukan solusi.")
