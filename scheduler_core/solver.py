@@ -158,19 +158,20 @@ class SchedulerSolver:
             # ---------------------------------------------------------
             if mapel == "M01" and rombel in m01_slot_mapping:
                 if kamis_key:
-                    self.model.Add(tugas_hari_aktif[(t_id, kamis_key)] == 1)
                     target_jam = m01_slot_mapping[rombel]
-                    for jam in self.jam_per_hari[kamis_key]:
-                        if jam in target_jam:
-                            self.model.Add(self.variables[(t_id, kamis_key, jam)] == 1)
-                        else:
-                            self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
+                    # Pastikan jam target tersedia di hari Kamis
+                    if all(j in self.jam_per_hari[kamis_key] for j in target_jam):
+                        self.model.Add(tugas_hari_aktif[(t_id, kamis_key)] == 1)
+                        for jam in self.jam_per_hari[kamis_key]:
+                            if jam in target_jam:
+                                self.model.Add(self.variables[(t_id, kamis_key, jam)] == 1)
+                            else:
+                                self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
 
             # ---------------------------------------------------------
-            # ATURAN M09 & M10: KHUSUS KELAS 9 SAJA
-            # - Blok > 1 JP: Jam 1–4 saja (TIDAK BOLEH > Jam 4)
-            # - Blok 1 JP  : Boleh s/d Jam ke-6 (TIDAK BOLEH > Jam 6)
-            # - Kelas 7 & 8: Bebas mengikuti slot reguler
+            # ATURAN MAPEL M09 & M10 (KHUSUS KELAS 9 SAJA)
+            # - Blok > 1 JP: Jam 1-4
+            # - Blok 1 JP  : Boleh s/d Jam ke-6
             # ---------------------------------------------------------
             is_kelas_9 = rombel.startswith("9")
 
@@ -182,10 +183,14 @@ class SchedulerSolver:
                         elif jp == 1 and jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
-            # PJOK Jam Maksimal Jam ke-6
+            # ---------------------------------------------------------
+            # ATURAN M11 (PJOK) KHUSUS KELAS 9:
+            # - Mengizinkan penempatan hingga Jam ke-6 (Termasuk jam 4, 5, 6)
+            # ---------------------------------------------------------
             if mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
+                        # Tidak boleh melebihi jam ke-6 untuk semua kelas
                         if jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
@@ -266,14 +271,20 @@ class SchedulerSolver:
                     else:
                         self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
-        # Penalti Pendukung (PJOK Siang)
+        # -------------------------------------------------------------
+        # OPTIMALISASI PENALTI (SOFT CONSTRAINTS)
+        # -------------------------------------------------------------
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
-            for hari in self.list_hari:
-                for jam in self.jam_per_hari[hari]:
-                    if mapel in self.mapel_pjok and jam > 3:
-                        self.penalties.append(self.variables[(t_id, hari, jam)] * 500)
+            rombel = t["rombel"]
+            
+            # Penalti ringan untuk M11 (PJOK) jika masuk jam 4-6 (diprioritaskan pagi jika memungkinkan)
+            if mapel in self.mapel_pjok:
+                for hari in self.list_hari:
+                    for jam in self.jam_per_hari[hari]:
+                        if jam in [4, 5, 6]:
+                            self.penalties.append(self.variables[(t_id, hari, jam)] * 100)
 
         if self.penalties:
             self.model.Minimize(sum(self.penalties))
