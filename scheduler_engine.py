@@ -1,487 +1,247 @@
-import io
 import pandas as pd
 from ortools.sat.python import cp_model
 
 
-# =====================================================================
-# 1. CLASS SOLVER (CP-SAT ENGINE)
-# =====================================================================
-class SchedulerSolver:
-
-    def __init__(self, scheduler):
-        self.scheduler = scheduler
-        self.model = cp_model.CpModel()
-        self.solver = None
-
-        # Standardisasi Data & DataFrame
-        self.guru = scheduler.guru.copy()
-        self.rombel = scheduler.rombel.copy()
-        self.mengajar = scheduler.mengajar.copy()
-        self.mapel = scheduler.mapel.copy()
-        self.slot = scheduler.slot.copy()
-
-        for df in [self.guru, self.rombel, self.mengajar, self.mapel, self.slot]:
-            df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
-
-        # Sanitasi String & Ekstraksi List
-        self.list_guru = self.guru["ID_Guru"].astype(str).str.strip().tolist()
-
-        col_rombel = "Kelas" if "Kelas" in self.rombel.columns else "ID_Rombel"
-        self.list_rombel = (
-            self.rombel[col_rombel].astype(str).str.strip().tolist()
-        )
-
-        self.list_mapel = (
-            self.mapel["ID_Mapel"].astype(str).str.strip().tolist()
-        )
-        self.list_hari = [
-            str(h).strip() for h in self.slot["Hari"].unique() if pd.notna(h)
-        ]
-
-        # Filter Slot Pembelajaran
-        slot_belajar = self.slot[
-            self.slot["Jenis"].astype(str).str.strip().str.upper()
-            == "PEMBELAJARAN"
-        ]
-
-        self.jam_per_hari = {}
-        for hari in self.list_hari:
-            jams = (
-                slot_belajar[
-                    slot_belajar["Hari"].astype(str).str.strip() == hari
-                ]["Jam"]
-                .dropna()
-                .astype(int)
-                .tolist()
-            )
-            self.jam_per_hari[hari] = sorted(jams)
-
-        # Ekstraksi Tugas Mengajar
-        self.tugas_mengajar = []
-        tugas_id = 0
-
-        mapel_mapping = {}
-        if (
-            "Nama_Mapel" in self.mapel.columns
-            and "ID_Mapel" in self.mapel.columns
-        ):
-            mapel_mapping = dict(
-                zip(
-                    self.mapel["Nama_Mapel"]
-                    .astype(str)
-                    .str.strip()
-                    .str.upper(),
-                    self.mapel["ID_Mapel"].astype(str).str.strip(),
-                )
-            )
-
-        col_mengajar_rombel = (
-            "Kelas" if "Kelas" in self.mengajar.columns else "ID_Rombel"
-        )
-
-        for _, row in self.mengajar.iterrows():
-            guru = str(row["ID_Guru"]).strip()
-            rombel = str(row[col_mengajar_rombel]).strip()
-
-            mapel_nama = str(row.get("Mapel", "")).strip().upper()
-            mapel_id = mapel_mapping.get(
-                mapel_nama, str(row.get("ID_Mapel", mapel_nama)).strip()
-            )
-
-            pembagian_str = str(
-                row.get("Pembagian", row.get("JP", "1"))
-            ).strip()
-            list_jp = []
-
-            if "," in pembagian_str:
-                list_jp = [
-                    int(x)
-                    for x in pembagian_str.split(",")
-                    if x.strip().isdigit()
-                ]
-            elif "." in pembagian_str:
-                list_jp = [
-                    int(x)
-                    for x in pembagian_str.split(".")
-                    if x.strip().isdigit()
-                ]
-            else:
-                try:
-                    list_jp = [int(float(pembagian_str))]
-                except Exception:
-                    list_jp = [int(row.get("JP", 1))]
-
-            for jp_blok in list_jp:
-                if jp_blok > 0:
-                    self.tugas_mengajar.append(
-                        {
-                            "id_tugas": tugas_id,
-                            "guru": guru,
-                            "rombel": rombel,
-                            "mapel": mapel_id,
-                            "jp": jp_blok,
-                        }
-                    )
-                    tugas_id += 1
-
-        # Identifikasi Mapel PJOK
-        self.mapel_pjok = set()
-        for _, row in self.mapel.iterrows():
-            kode = str(row.get("ID_Mapel", "")).strip().upper()
-            nama = str(row.get("Nama_Mapel", "")).strip().upper()
-            if (
-                kode in ["M11", "PJOK"]
-                or "JASMANI" in nama
-                or "PENJAS" in nama
-            ):
-                self.mapel_pjok.add(str(row["ID_Mapel"]).strip())
-
-        # Deteksi Status GTT & MGMP
-        self.guru_gtt_set = set()
-        self.guru_mgmp_dict = {}
-
-        for _, row in self.guru.iterrows():
-            g_id = str(row["ID_Guru"]).strip()
-            status_str = ""
-            for col in ["Status", "Kategori", "Status_Guru", "Jenis_Guru"]:
-                if col in row and pd.notna(row[col]):
-                    status_str += " " + str(row[col]).upper()
-
-            if "GTT" in status_str or "HONOR" in status_str or "G33" in g_id:
-                self.guru_gtt_set.add(g_id)
-
-            for col_mgmp in ["Hari_MGMP", "Hari_Libur", "Libur", "MGMP"]:
-                if col_mgmp in row and pd.notna(row[col_mgmp]):
-                    val = str(row[col_mgmp]).strip()
-                    if val and val.lower() != "nan" and val != "-":
-                        self.guru_mgmp_dict[g_id] = val
-                        break
-
-        self.variables = {}
-        self.penalties = []
-
-    def run_solver(
-        self,
-        timeout_seconds=120,
-        max_jam_mgmp_nongtt=4,
-        max_jp_per_hari=6,
-    ):
-        self.model = cp_model.CpModel()
-        self.variables = {}
-        self.penalties = []
-
-        # Variabel Keputusan
-        for t in self.tugas_mengajar:
-            t_id = t["id_tugas"]
-            for hari in self.list_hari:
-                for jam in self.jam_per_hari.get(hari, []):
-                    self.variables[(t_id, hari, jam)] = (
-                        self.model.NewBoolVar(f"t_{t_id}_{hari}_{jam}")
-                    )
-
-        tugas_hari_aktif = {}
-        for t in self.tugas_mengajar:
-            t_id = t["id_tugas"]
-            for hari in self.list_hari:
-                tugas_hari_aktif[(t_id, hari)] = self.model.NewBoolVar(
-                    f"aktif_t_{t_id}_{hari}"
-                )
-                jams = self.jam_per_hari.get(hari, [])
-                if jams:
-                    self.model.AddMaxEquality(
-                        tugas_hari_aktif[(t_id, hari)],
-                        [self.variables[(t_id, hari, jam)] for jam in jams],
-                    )
-                else:
-                    self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
-
-        kamis_key = next(
-            (h for h in self.list_hari if h.lower() == "kamis"), None
-        )
-
-        # Constraints Dasar & Preferensi Mapel
-        for t in self.tugas_mengajar:
-            t_id = t["id_tugas"]
-            guru = t["guru"]
-            mapel = t["mapel"]
-            rombel = t["rombel"]
-
-            # Pemenuhan JP
-            self.model.Add(
-                sum(
-                    self.variables[(t_id, hari, jam)]
-                    for hari in self.list_hari
-                    for jam in self.jam_per_hari.get(hari, [])
-                )
-                == t["jp"]
-            )
-
-            # 1 Blok Hari per Tugas
-            self.model.Add(
-                sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari)
-                == 1
-            )
-
-            # Soft Constraint: Agama M01
-            if mapel == "M01" and kamis_key:
-                if rombel in ["7A", "8A", "8C", "9A"]:
-                    self.penalties.append(
-                        (1 - tugas_hari_aktif[(t_id, kamis_key)]) * 500
-                    )
-
-            # Soft Constraint: Guru G32
-            if guru == "G32" and kamis_key and rombel == "8B":
-                self.penalties.append(
-                    (1 - tugas_hari_aktif[(t_id, kamis_key)]) * 500
-                )
-
-            # Hard Constraint: PJOK Max Jam ke-6
-            if mapel in self.mapel_pjok:
-                for hari in self.list_hari:
-                    for jam in self.jam_per_hari.get(hari, []):
-                        if (t_id, hari, jam) in self.variables:
-                            if jam > 6:
-                                self.model.Add(
-                                    self.variables[(t_id, hari, jam)] == 0
-                                )
-
-        # Constraints MGMP (GTT vs Non-GTT)
-        for guru, hari_libur in self.guru_mgmp_dict.items():
-            target_hari = next(
-                (h for h in self.list_hari if h.lower() == hari_libur.lower()),
-                None,
-            )
-            if target_hari:
-                tugas_guru = [
-                    t["id_tugas"]
-                    for t in self.tugas_mengajar
-                    if t["guru"] == guru
-                ]
-                is_gtt = guru in self.guru_gtt_set
-
-                for t_id in tugas_guru:
-                    for jam in self.jam_per_hari.get(target_hari, []):
-                        if (t_id, target_hari, jam) in self.variables:
-                            if is_gtt:
-                                # GTT: Libur Full (0 JP)
-                                self.model.Add(
-                                    self.variables[(t_id, target_hari, jam)]
-                                    == 0
-                                )
-                            else:
-                                # Non-GTT: Mengajar hanya sampai Jam ke-N
-                                if jam > max_jam_mgmp_nongtt:
-                                    self.model.Add(
-                                        self.variables[
-                                            (t_id, target_hari, jam)
-                                        ]
-                                        == 0
-                                    )
-
-        # Max JP Guru per Hari
-        for guru in self.list_guru:
-            tugas_guru = [
-                t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru
-            ]
-            for hari in self.list_hari:
-                jams = self.jam_per_hari.get(hari, [])
-                if jams and tugas_guru:
-                    self.model.Add(
-                        sum(
-                            self.variables[(t_id, hari, jam)]
-                            for t_id in tugas_guru
-                            for jam in jams
-                            if (t_id, hari, jam) in self.variables
-                        )
-                        <= max_jp_per_hari
-                    )
-
-        # Mencegah Bentrok Rombel
-        for rombel in self.list_rombel:
-            tugas_rombel = [
-                t["id_tugas"]
-                for t in self.tugas_mengajar
-                if t["rombel"] == rombel
-            ]
-            for hari in self.list_hari:
-                for jam in self.jam_per_hari.get(hari, []):
-                    self.model.Add(
-                        sum(
-                            self.variables[(t_id, hari, jam)]
-                            for t_id in tugas_rombel
-                            if (t_id, hari, jam) in self.variables
-                        )
-                        <= 1
-                    )
-
-        # Mencegah Bentrok Guru
-        for guru in self.list_guru:
-            tugas_guru = [
-                t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru
-            ]
-            for hari in self.list_hari:
-                for jam in self.jam_per_hari.get(hari, []):
-                    self.model.Add(
-                        sum(
-                            self.variables[(t_id, hari, jam)]
-                            for t_id in tugas_guru
-                            if (t_id, hari, jam) in self.variables
-                        )
-                        <= 1
-                    )
-
-        # Jam Berurutan (Sliding Window)
-        for t in self.tugas_mengajar:
-            t_id = t["id_tugas"]
-            target_jp = t["jp"]
-            if target_jp > 1:
-                for hari in self.list_hari:
-                    jam_hari = self.jam_per_hari.get(hari, [])
-                    num_windows = len(jam_hari) - target_jp + 1
-
-                    if num_windows > 0:
-                        start_vars = []
-                        for i in range(num_windows):
-                            s_var = self.model.NewBoolVar(
-                                f"start_{t_id}_{hari}_{jam_hari[i]}"
-                            )
-                            start_vars.append(s_var)
-                            for offset in range(target_jp):
-                                j_target = jam_hari[i + offset]
-                                if (t_id, hari, j_target) in self.variables:
-                                    self.model.Add(
-                                        self.variables[(t_id, hari, j_target)]
-                                        == 1
-                                    ).OnlyEnforceIf(s_var)
-                        self.model.Add(
-                            sum(start_vars) == tugas_hari_aktif[(t_id, hari)]
-                        )
-                    else:
-                        self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
-
-        if self.penalties:
-            self.model.Minimize(sum(self.penalties))
-
-        # Solve
-        self.solver = cp_model.CpSolver()
-        self.solver.parameters.max_time_in_seconds = timeout_seconds
-        self.solver.parameters.num_search_workers = 4
-        status = self.solver.Solve(self.model)
-
-        return status in [cp_model.OPTIMAL, cp_model.FEASIBLE]
-
-    def extract_results(self):
-        if self.solver is None:
-            return pd.DataFrame()
-
-        rows = []
-        tugas_lookup = {t["id_tugas"]: t for t in self.tugas_mengajar}
-
-        for (t_id, hari, jam), var in self.variables.items():
-            if self.solver.Value(var) == 1:
-                t = tugas_lookup[t_id]
-                rows.append(
-                    {
-                        "Hari": hari,
-                        "Jam_Ke": jam,
-                        "ID_Rombel": t["rombel"],
-                        "ID_Guru": t["guru"],
-                        "ID_Mapel": t["mapel"],
-                    }
-                )
-
-        df_hasil = pd.DataFrame(rows)
-        if not df_hasil.empty:
-            df_hasil = df_hasil.sort_values(
-                by=["Hari", "ID_Rombel", "Jam_Ke"]
-            ).reset_index(drop=True)
-
-        return df_hasil
-
-    def generate_teacher_report(self, df_hasil):
-        if df_hasil.empty:
-            return pd.DataFrame()
-
-        laporan = (
-            df_hasil.groupby(["ID_Guru", "Hari"])
-            .agg(
-                Total_JP=("Jam_Ke", "count"),
-                Detail_Kelas=(
-                    "ID_Rombel",
-                    lambda x: ", ".join(sorted(set(x))),
-                ),
-            )
-            .reset_index()
-        )
-
-        total_per_guru = (
-            df_hasil.groupby("ID_Guru")["Jam_Ke"]
-            .count()
-            .reset_index()
-            .rename(columns={"Jam_Ke": "Total_JP_Mingguan"})
-        )
-
-        df_laporan = pd.merge(laporan, total_per_guru, on="ID_Guru", how="left")
-        return df_laporan.sort_values(by=["ID_Guru", "Hari"]).reset_index(
-            drop=True
-        )
-
-
-# =====================================================================
-# 2. WRAPPER CLASS UNTUK PENGGUNAAN DI STREAMLIT
-# =====================================================================
 class Scheduler:
 
     def __init__(self, guru_df, rombel_df, mengajar_df, mapel_df, slot_df):
-        self.guru = guru_df
-        self.rombel = rombel_df
-        self.mengajar = mengajar_df
-        self.mapel = mapel_df
-        self.slot = slot_df
+        self.guru_df = guru_df
+        self.rombel_df = rombel_df
+        self.mengajar_df = mengajar_df
+        self.mapel_df = mapel_df
+        self.slot_df = slot_df
 
-    def solve_with_fallback(self, timeout_total=120, progress_callback=None):
-        """Mencoba berbagai skenario secara bertahap hingga menemukan solusi yang feasible."""
-        skenario_list = [
-            {
-                "desc": "Ideal: Max 6 JP/Hari | MGMP Non-GTT Max Jam Ke-4",
-                "max_jp": 6,
-                "max_mgmp": 4,
-            },
-            {
-                "desc": "Relaksasi 1: Max 6 JP/Hari | MGMP Non-GTT Max Jam Ke-3",
-                "max_jp": 6,
-                "max_mgmp": 3,
-            },
-            {
-                "desc": "Relaksasi 2: Max 7 JP/Hari | MGMP Non-GTT Max Jam Ke-4",
-                "max_jp": 7,
-                "max_mgmp": 4,
-            },
-            {
-                "desc": "Darurat: Max 8 JP/Hari | MGMP Non-GTT Max Jam Ke-5",
-                "max_jp": 8,
-                "max_mgmp": 5,
-            },
-        ]
+        # Clean dataframe column names
+        for df in [
+            self.guru_df,
+            self.rombel_df,
+            self.mengajar_df,
+            self.mapel_df,
+            self.slot_df,
+        ]:
+            df.columns = [str(c).strip() for c in df.columns]
 
-        timeout_per_skenario = max(10, timeout_total // len(skenario_list))
+    def _solve_skenario(self, timeout_sec, strict_mgmp=True):
+        model = cp_model.CpModel()
 
-        for i, skenario in enumerate(skenario_list, start=1):
-            if progress_callback:
-                progress_callback(
-                    f"Mencoba Skenario {i}/{len(skenario_list)}: {skenario['desc']}..."
-                )
+        # Extract List Data
+        rombel_list = self.rombel_df["ID_Rombel"].astype(str).str.strip().tolist()
+        
+        # Ambil slot berjenis 'PEMBELAJARAN' saja
+        col_jenis = next(
+            (c for c in self.slot_df.columns if c.lower() == "jenis"), None
+        )
+        if col_jenis:
+            slot_pemb = self.slot_df[
+                self.slot_df[col_jenis].astype(str).str.strip().str.upper()
+                == "PEMBELAJARAN"
+            ]
+        else:
+            slot_pemb = self.slot_df
 
-            solver = SchedulerSolver(self)
-            is_success = solver.run_solver(
-                timeout_seconds=timeout_per_skenario,
-                max_jam_mgmp_nongtt=skenario["max_mgmp"],
-                max_jp_per_hari=skenario["max_jp"],
+        hari_list = slot_pemb["Hari"].astype(str).str.strip().unique().tolist()
+        
+        # Buat daftar unik (Hari, Jam_Ke)
+        slot_tuples = []
+        for _, row in slot_pemb.iterrows():
+            slot_tuples.append((str(row["Hari"]).strip(), int(row["Jam_Ke"])))
+        slot_tuples = list(set(slot_tuples))
+
+        # Variabel Keputusan X[tugas_idx, hari, jam]
+        X = {}
+        tugas_info = []
+
+        for idx, row in self.mengajar_df.iterrows():
+            rombel = str(row["ID_Rombel"]).strip()
+            guru = str(row["ID_Guru"]).strip()
+            mapel = str(row["ID_Mapel"]).strip()
+            jp = int(row["Beban_JP"])
+
+            tugas_info.append(
+                {
+                    "idx": idx,
+                    "rombel": rombel,
+                    "guru": guru,
+                    "mapel": mapel,
+                    "jp": jp,
+                }
             )
 
-            if is_success:
-                df_hasil = solver.extract_results()
-                df_laporan = solver.generate_teacher_report(df_hasil)
-                return True, df_hasil, df_laporan, skenario["desc"]
+            for h, j in slot_tuples:
+                X[(idx, h, j)] = model.NewBoolVar(f"x_{idx}_{h}_{j}")
 
-        return False, pd.DataFrame(), pd.DataFrame(), "Semua Skenario Gagal"
+        # -------------------------------------------------------------
+        # CONSTRAINT 1: Setiap Tugas Mengajar Harus Terpenuhi Beban JP-nya
+        # -------------------------------------------------------------
+        for t in tugas_info:
+            model.Add(
+                sum(X[(t["idx"], h, j)] for h, j in slot_tuples) == t["jp"]
+            )
+
+        # -------------------------------------------------------------
+        # CONSTRAINT 2: Dalam 1 Rombel & 1 Slot Waktu, Max 1 Mapel
+        # -------------------------------------------------------------
+        for r in rombel_list:
+            tugas_rombel = [t["idx"] for t in tugas_info if t["rombel"] == r]
+            for h, j in slot_tuples:
+                model.Add(sum(X[(idx, h, j)] for idx in tugas_rombel) <= 1)
+
+        # -------------------------------------------------------------
+        # CONSTRAINT 3: Seorang Guru Tidak Boleh Mengajar di 2 Kelas Bersamaan
+        # -------------------------------------------------------------
+        guru_list = self.guru_df["ID_Guru"].astype(str).str.strip().tolist()
+        for g in guru_list:
+            tugas_guru = [t["idx"] for t in tugas_info if t["guru"] == g]
+            for h, j in slot_tuples:
+                model.Add(sum(X[(idx, h, j)] for idx in tugas_guru) <= 1)
+
+        # -------------------------------------------------------------
+        # CONSTRAINT 4 (DIPERKETAT): MAX 2 JP PER HARI UNTUK MAPEL MANAPUN
+        # -------------------------------------------------------------
+        # Mencegah mapel seperti M06, M10, dll. diajarkan 3 JP sekaligus dalam sehari
+        for r in rombel_list:
+            # Kelompokkan tugas berdasarkan mapel di rombel tersebut
+            mapel_in_rombel = set(
+                t["mapel"] for t in tugas_info if t["rombel"] == r
+            )
+            for m in mapel_in_rombel:
+                tugas_m = [
+                    t["idx"]
+                    for t in tugas_info
+                    if t["rombel"] == r and t["mapel"] == m
+                ]
+                for h in hari_list:
+                    slots_in_h = [
+                        (sh, sj) for (sh, sj) in slot_tuples if sh == h
+                    ]
+                    # Maksimal 2 JP per hari untuk mapel yang sama di kelas yang sama
+                    model.Add(
+                        sum(
+                            X[(idx, h, j)]
+                            for idx in tugas_m
+                            for (sh, sj) in slots_in_h
+                            if sh == h and (idx, h, sj) in X
+                        )
+                        <= 2
+                    )
+
+        # -------------------------------------------------------------
+        # CONSTRAINT 5 (ATURAN KHUSUS M08): Wajib di Jam Ke 1 - 4
+        # -------------------------------------------------------------
+        for t in tugas_info:
+            if t["mapel"].upper() == "M08":
+                for h, j in slot_tuples:
+                    if j > 4:
+                        # M08 tidak boleh dijadwalkan di jam ke-5 ke atas
+                        model.Add(X[(t["idx"], h, j)] == 0)
+
+        # -------------------------------------------------------------
+        # CONSTRAINT 6: Handling MGMP / Hari Khusus Guru
+        # -------------------------------------------------------------
+        if strict_mgmp and "Hari_MGMP" in self.guru_df.columns:
+            for _, row in self.guru_df.iterrows():
+                g_id = str(row["ID_Guru"]).strip()
+                mgmp_day = (
+                    str(row["Hari_MGMP"]).strip()
+                    if pd.notna(row.get("Hari_MGMP"))
+                    else ""
+                )
+
+                if mgmp_day and mgmp_day.lower() != "nan":
+                    tugas_g = [
+                        t["idx"] for t in tugas_info if t["guru"] == g_id
+                    ]
+                    # Guru tidak boleh mengajar di hari MGMP pada jam > 4 (misal acara MGMP siang)
+                    for h, j in slot_tuples:
+                        if h.lower() == mgmp_day.lower() and j > 4:
+                            for idx in tugas_g:
+                                model.Add(X[(idx, h, j)] == 0)
+
+        # -------------------------------------------------------------
+        # SOLVER EXECUTION
+        # -------------------------------------------------------------
+        solver = cp_model.CpSolver()
+        solver.parameters.max_time_in_seconds = float(timeout_sec)
+        solver.parameters.num_search_workers = 4
+
+        status = solver.Solve(model)
+
+        if status in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+            results = []
+            for t in tugas_info:
+                for h, j in slot_tuples:
+                    if solver.Value(X[(t["idx"], h, j)]) == 1:
+                        results.append(
+                            {
+                                "Hari": h,
+                                "Jam_Ke": j,
+                                "ID_Rombel": t["rombel"],
+                                "ID_Guru": t["guru"],
+                                "ID_Mapel": t["mapel"],
+                            }
+                        )
+
+            df_res = pd.DataFrame(results)
+            if not df_res.empty:
+                df_res = df_res.sort_values(
+                    by=["ID_Rombel", "Hari", "Jam_Ke"]
+                ).reset_index(drop=True)
+
+            # Reorientasi Laporan Guru
+            df_laporan = (
+                df_res.groupby("ID_Guru")
+                .agg(Total_JP=("Jam_Ke", "count"))
+                .reset_index()
+            )
+
+            return True, df_res, df_laporan
+        else:
+            return False, pd.DataFrame(), pd.DataFrame()
+
+    def solve_with_fallback(self, timeout_total=180, progress_callback=None):
+        """Strategi eksekusi bertahap (strict -> relaxed mgmp)."""
+
+        # Tahap 1: Skenario Ketat (Termasuk Aturan MGMP Strict)
+        if progress_callback:
+            progress_callback(
+                "Mencari jadwal optimal (Batas max 2 JP/hari & M08 jam 1-4)..."
+            )
+
+        t_stage = max(30, int(timeout_total * 0.7))
+        success, df_res, df_lap = self._solve_skenario(
+            timeout_sec=t_stage, strict_mgmp=True
+        )
+
+        if success:
+            return (
+                True,
+                df_res,
+                df_lap,
+                "Skenario Optimal (MGMP Strict & M08 Jam 1-4)",
+            )
+
+        # Tahap 2: Skenario Relaksasi MGMP jika Skenario 1 tidak dapat solusi
+        if progress_callback:
+            progress_callback("Mencoba relaksasi batas MGMP guru...")
+
+        t_rem = max(30, int(timeout_total * 0.3))
+        success, df_res, df_lap = self._solve_skenario(
+            timeout_sec=t_rem, strict_mgmp=False
+        )
+
+        if success:
+            return (
+                True,
+                df_res,
+                df_lap,
+                "Skenario Relaksasi (MGMP Disesuaikan, M08 Tetap Jam 1-4)",
+            )
+
+        return False, pd.DataFrame(), pd.DataFrame(), "Solver Tidak Menemukan Solusi"
+
+    def generate(self, timeout=120):
+        """Alias kompatibilitas versi lama."""
+        success, df_hasil, df_laporan, _ = self.solve_with_fallback(
+            timeout_total=timeout
+        )
+        return df_hasil, df_laporan
