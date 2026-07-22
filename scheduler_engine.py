@@ -370,7 +370,13 @@ class SchedulerSolver:
         """Menghasilkan rekapitulasi mengajar guru per hari & total mingguan."""
         if df_hasil.empty:
             return pd.DataFrame(
-                columns=["ID_Guru", "Hari", "Total_JP", "Detail_Kelas", "Total_JP_Mingguan"]
+                columns=[
+                    "ID_Guru",
+                    "Hari",
+                    "Total_JP",
+                    "Detail_Kelas",
+                    "Total_JP_Mingguan",
+                ]
             )
 
         laporan = (
@@ -426,3 +432,7 @@ class SchedulerEngine:
         df_laporan_guru = self.solver_instance.generate_teacher_report(df_hasil)
 
         return df_hasil, df_laporan_guru
+
+
+# Alias agar kompatibel jika ada file lain yang mengimpor 'Scheduler'
+Scheduler = SchedulerEngine
