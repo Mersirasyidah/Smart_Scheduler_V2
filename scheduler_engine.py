@@ -16,7 +16,7 @@ class SchedulerSolver:
         self.mapel = scheduler.mapel.copy()
         self.slot = scheduler.slot.copy()
 
-        # Merapikan nama kolom
+        # Merapikan nama kolom (hapus spasi & format standar)
         for df in [self.guru, self.rombel, self.mengajar, self.mapel, self.slot]:
             df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
 
@@ -128,27 +128,22 @@ class SchedulerSolver:
             if kode in ["M11", "PJOK"] or "JASMANI" in nama or "PENJAS" in nama:
                 self.mapel_pjok.add(str(row["ID_Mapel"]).strip())
 
-        # Deteksi Status GTT & MGMP
-        self.guru_gtt_set = set()
+        # Deteksi Hari MGMP / Hari Libur Per Guru
         self.guru_mgmp_dict = {}
-
         for _, row in self.guru.iterrows():
             g_id = str(row["ID_Guru"]).strip()
-            status_str = ""
-            for col in ["Status", "Kategori", "Status_Guru", "Jenis_Guru"]:
-                if col in row and pd.notna(row[col]):
-                    status_str += " " + str(row[col]).upper()
-
-            if "GTT" in status_str or "HONOR" in status_str:
-                self.guru_gtt_set.add(g_id)
-
-            if "Hari_MGMP" in row and pd.notna(row["Hari_MGMP"]):
-                self.guru_mgmp_dict[g_id] = str(row["Hari_MGMP"]).strip()
+            # Mencari kolom Hari_MGMP, Libur, atau Hari_Libur
+            for col_mgmp in ["Hari_MGMP", "Hari_Libur", "Libur", "MGMP"]:
+                if col_mgmp in row and pd.notna(row[col_mgmp]):
+                    val = str(row[col_mgmp]).strip()
+                    if val and val.lower() != "nan" and val != "-":
+                        self.guru_mgmp_dict[g_id] = val
+                        break
 
         self.variables = {}
         self.penalties = []
 
-    def run_solver(self, timeout_seconds=120):
+    def run_solver(self, timeout_seconds=120, max_jp_per_hari=6):
         # Inisialisasi Variabel Utama
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
@@ -177,7 +172,7 @@ class SchedulerSolver:
         kamis_key = next((h for h in self.list_hari if h.lower() == "kamis"), None)
         selasa_key = next((h for h in self.list_hari if h.lower() == "selasa"), None)
 
-        # CONSTRAINTS & RULES
+        # CONSTRAINTS & RULES SPESIFIK TUGAS
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             guru = t["guru"]
@@ -248,7 +243,27 @@ class SchedulerSolver:
                                     self.variables[(t_id, hari, jam)] * bobot
                                 )
 
-        # BATAS MAKSIMAL JAM GURU PER HARI
+        # -------------------------------------------------------------
+        # ATURAN HARI LIBUR / MGMP GURU (HARD CONSTRAINT)
+        # -------------------------------------------------------------
+        for guru, hari_libur in self.guru_mgmp_dict.items():
+            # Mencari nama hari yang cocok (mencegah beda huruf besar/kecil)
+            target_hari = next(
+                (h for h in self.list_hari if h.lower() == hari_libur.lower()), None
+            )
+            if target_hari:
+                tugas_guru = [
+                    t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru
+                ]
+                for t_id in tugas_guru:
+                    for jam in self.jam_per_hari.get(target_hari, []):
+                        if (t_id, target_hari, jam) in self.variables:
+                            # Kunci mati: Guru DILARANG MENGAJAR di hari libur/MGMP
+                            self.model.Add(self.variables[(t_id, target_hari, jam)] == 0)
+
+        # -------------------------------------------------------------
+        # BATAS MAKSIMAL 6 JP MENGAJAR GURU PER HARI
+        # -------------------------------------------------------------
         for guru in self.list_guru:
             tugas_guru = [
                 t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru
@@ -263,7 +278,7 @@ class SchedulerSolver:
                             for jam in jams
                             if (t_id, hari, jam) in self.variables
                         )
-                        <= 8
+                        <= max_jp_per_hari  # Batas Maksimal dikunci di 6 JP
                     )
 
         # MENCEGAH BENTROK ROMBEL
@@ -419,8 +434,10 @@ class SchedulerEngine:
     def generate(self, timeout=120):
         self.solver_instance = SchedulerSolver(self)
 
-        # 1. Jalankan Solver
-        success = self.solver_instance.run_solver(timeout_seconds=timeout)
+        # 1. Jalankan Solver (Dengan batas 6 JP)
+        success = self.solver_instance.run_solver(
+            timeout_seconds=timeout, max_jp_per_hari=6
+        )
 
         if not success:
             return pd.DataFrame(), pd.DataFrame()
@@ -434,5 +451,5 @@ class SchedulerEngine:
         return df_hasil, df_laporan_guru
 
 
-# Alias agar kompatibel jika ada file lain yang mengimpor 'Scheduler'
+# Alias agar kompatibel
 Scheduler = SchedulerEngine
