@@ -3,13 +3,15 @@ import pandas as pd
 import streamlit as st
 from scheduler_engine import Scheduler
 
-st.set_page_config(page_title="AI Scheduler", page_icon="🤖", layout="wide")
+st.set_page_config(
+    page_title="AI Scheduler", page_icon="🤖", layout="wide"
+)
 
 st.title("🤖 AI Scheduler")
 st.markdown(
     """
-Gunakan modul AI ini untuk membuat jadwal pelajaran otomatis berdasarkan aturan constraint 
-(MGMP Guru Reguler vs GTT, Batas JP Harian, Jam PJOK, dan Pembagian Jam Berurutan).
+Modul AI Penjadwalan Otomatis. Hasil ekspor akan otomatis membentuk **sheet master (`Jadwal_Semua_Kelas`)** 
+serta **sheet terpisah per kelas (`Kelas_7A`, `Kelas_7B`, dsb.)** sesuai format template Anda.
 """
 )
 
@@ -18,9 +20,9 @@ timeout_seconds = st.sidebar.number_input(
     "Waktu Pencarian Maksimal (Detik)",
     min_value=30,
     max_value=600,
-    value=120,
+    value=180,
     step=30,
-    help="Semakin lama waktu pencarian, semakin tinggi peluang solver menemukan kombinasi yang optimal.",
+    help="Semakin lama waktu pencarian, semakin tinggi peluang solver menemukan kombinasi optimal.",
 )
 
 # 1. Section Upload File
@@ -55,9 +57,13 @@ if uploaded_file:
 
             st.success("✅ Seluruh sheet master berhasil dibaca!")
 
-            # Hitung Slot Pembelajaran Spesifik (Bukan Total Baris)
+            # Hitung Slot Pembelajaran
             col_jenis = next(
-                (c for c in slot_df.columns if str(c).strip().lower() == "jenis"),
+                (
+                    c
+                    for c in slot_df.columns
+                    if str(c).strip().lower() == "jenis"
+                ),
                 None,
             )
             if col_jenis:
@@ -105,95 +111,181 @@ if uploaded_file:
 
                 progress_bar.progress(100)
 
-                if success:
+                if success and not df_hasil.empty:
                     status_box.success(
                         f"🎉 **Penjadwalan Berhasil!** ({desc_skenario})"
+                    )
+
+                    # --- MAPPING NAMA GURU & NAMA MAPEL LENGKAP ---
+                    col_guru_id = next(
+                        (
+                            c
+                            for c in guru_df.columns
+                            if "id" in c.lower() and "guru" in c.lower()
+                        ),
+                        guru_df.columns[0],
+                    )
+                    col_guru_nama = next(
+                        (c for c in guru_df.columns if "nama" in c.lower()),
+                        col_guru_id,
+                    )
+                    guru_map = dict(
+                        zip(
+                            guru_df[col_guru_id].astype(str).str.strip(),
+                            guru_df[col_guru_nama].astype(str).str.strip(),
+                        )
+                    )
+
+                    col_mapel_id = next(
+                        (
+                            c
+                            for c in mapel_df.columns
+                            if "id" in c.lower() and "mapel" in c.lower()
+                        ),
+                        mapel_df.columns[0],
+                    )
+                    col_mapel_nama = next(
+                        (c for c in mapel_df.columns if "nama" in c.lower()),
+                        col_mapel_id,
+                    )
+                    mapel_map = dict(
+                        zip(
+                            mapel_df[col_mapel_id].astype(str).str.strip(),
+                            mapel_df[col_mapel_nama].astype(str).str.strip(),
+                        )
+                    )
+
+                    # Buat DataFrame Utama yang Rapi
+                    df_master = df_hasil.copy()
+                    df_master["Nama Guru"] = (
+                        df_master["ID_Guru"]
+                        .astype(str)
+                        .str.strip()
+                        .map(guru_map)
+                        .fillna(df_master["ID_Guru"])
+                    )
+                    df_master["Mata Pelajaran"] = (
+                        df_master["ID_Mapel"]
+                        .astype(str)
+                        .str.strip()
+                        .map(mapel_map)
+                        .fillna(df_master["ID_Mapel"])
+                    )
+
+                    # Reorder & rename kolom master sesuai template "Jadwal_Semua_Kelas"
+                    df_master_export = df_master[
+                        [
+                            "Hari",
+                            "Jam_Ke",
+                            "ID_Rombel",
+                            "Nama Guru",
+                            "Mata Pelajaran",
+                        ]
+                    ].rename(
+                        columns={
+                            "Jam_Ke": "Jam Ke",
+                            "ID_Rombel": "Kelas / Rombel",
+                        }
                     )
 
                     st.markdown("---")
                     st.subheader("📊 Hasil Penjadwalan")
 
-                    tab1, tab2, tab3, tab4 = st.tabs(
+                    tab1, tab2, tab3 = st.tabs(
                         [
-                            "📅 Matriks Per Kelas",
-                            "📝 Detail Tabel",
-                            "👨‍🏫 Laporan Guru",
-                            "📥 Download Excel",
+                            "📋 Jadwal Semua Kelas",
+                            "🏫 Pratinjau Per Kelas",
+                            "📥 Download Excel Multi-Sheet",
                         ]
                     )
 
-                    # --- TAB 1: MATRIKS PER KELAS ---
+                    # TAB 1: Master Semua Kelas
                     with tab1:
-                        st.markdown(
-                            "##### 📅 Jadwal Pelajaran Matriks Per Kelas / Rombel"
-                        )
-                        if not df_hasil.empty:
-                            df_display = df_hasil.copy()
-                            df_display["Mapel_Guru"] = (
-                                df_display["ID_Mapel"].astype(str)
-                                + " ("
-                                + df_display["ID_Guru"].astype(str)
-                                + ")"
-                            )
+                        st.markdown("##### Tabel Master: `Jadwal_Semua_Kelas`")
+                        st.dataframe(df_master_export, use_container_width=True)
 
-                            # Membuat Pivot Table (Baris: Hari & Jam_Ke, Kolom: ID_Rombel)
-                            pivot_jadwal = df_display.pivot_table(
-                                index=["Hari", "Jam_Ke"],
-                                columns="ID_Rombel",
-                                values="Mapel_Guru",
-                                aggfunc="first",
-                            ).fillna("-")
-
-                            st.dataframe(pivot_jadwal, use_container_width=True)
-                        else:
-                            st.warning("Data hasil jadwal kosong.")
-
-                    # --- TAB 2: DETAIL TABEL RAW ---
+                    # TAB 2: Grid Pratinjau Per Kelas
                     with tab2:
-                        st.markdown("##### Tabel Raw Plotting Jam Belajar")
-                        st.dataframe(df_hasil, use_container_width=True)
+                        list_rombel = sorted(
+                            df_master["ID_Rombel"].unique().tolist()
+                        )
+                        selected_kelas = st.selectbox(
+                            "Pilih Kelas / Rombel:", list_rombel
+                        )
 
-                    # --- TAB 3: LAPORAN BEBAN GURU ---
+                        df_kelas = df_master[
+                            df_master["ID_Rombel"] == selected_kelas
+                        ]
+                        pivot_kelas = df_kelas.pivot_table(
+                            index="Jam_Ke",
+                            columns="Hari",
+                            values="Nama Guru",
+                            aggfunc="first",
+                        ).fillna("-")
+
+                        st.markdown(f"##### Matriks Jadwal **Kelas {selected_kelas}**")
+                        st.dataframe(pivot_kelas, use_container_width=True)
+
+                    # TAB 3: Download File Excel dengan Format Persis 'Jadwal baru.xlsx'
                     with tab3:
-                        st.markdown("##### Laporan Distribusi Mengajar Per Guru")
-                        st.dataframe(df_laporan_guru, use_container_width=True)
-
-                    # --- TAB 4: DOWNLOAD EXCEL ---
-                    with tab4:
-                        st.markdown("##### Unduh Data Hasil Penjadwalan")
+                        st.markdown(
+                            "##### Unduh File Excel dengan Sheet Terpisah Per Kelas"
+                        )
 
                         output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                            # Sheet 1: Matriks per Kelas
-                            if not df_hasil.empty:
-                                pivot_jadwal.to_excel(
-                                    writer, sheet_name="Matriks_Jadwal_Kelas"
+                        with pd.ExcelWriter(
+                            output, engine="openpyxl"
+                        ) as writer:
+                            # 1. Sheet Pertama: Jadwal_Semua_Kelas
+                            df_master_export.to_excel(
+                                writer,
+                                sheet_name="Jadwal_Semua_Kelas",
+                                index=False,
+                            )
+
+                            # 2. Sheet Berikutnya: Per Kelas (Kelas_7A, Kelas_7B, dst.)
+                            list_rombel = sorted(
+                                df_master["ID_Rombel"].unique().tolist()
+                            )
+                            for r in list_rombel:
+                                df_r = df_master[df_master["ID_Rombel"] == r]
+                                pivot_r = df_r.pivot_table(
+                                    index="Jam_Ke",
+                                    columns="Hari",
+                                    values="Nama Guru",
+                                    aggfunc="first",
+                                ).reset_index()
+
+                                # Simpan ke Sheet Kelas_XX
+                                sheet_title = f"Kelas_{r}"
+                                pivot_r.to_excel(
+                                    writer,
+                                    sheet_name=sheet_title,
+                                    index=False,
                                 )
 
-                            # Sheet 2: Detail Raw Data
-                            df_hasil.to_excel(
-                                writer, sheet_name="Jadwal_Master", index=False
-                            )
-
-                            # Sheet 3: Laporan Guru
+                            # 3. Sheet Laporan Guru
                             df_laporan_guru.to_excel(
-                                writer, sheet_name="Laporan_Guru", index=False
+                                writer,
+                                sheet_name="Laporan_Beban_Guru",
+                                index=False,
                             )
 
-                        excel_data = output.getvalue()
+                        excel_bytes = output.getvalue()
 
                         st.download_button(
-                            label="📥 Download File Excel Hasil Jadwal (.xlsx)",
-                            data=excel_data,
-                            file_name="Hasil_Penjadwalan_AI.xlsx",
+                            label="📥 Download Excel (Format Multi-Sheet Per Kelas)",
+                            data=excel_bytes,
+                            file_name="Jadwal_Pelajaran_Lengkap.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         )
+
                 else:
                     status_box.error(
                         "❌ **Solver Gagal Menemukan Solusi.**\n\n"
                         "**Saran Perbaikan:**\n"
                         "1. Longgarkan ketersediaan jam di sheet `Slot`.\n"
-                        "2. Periksa apakah ada guru yang bentrok jam MGMP-nya pada hari yang sama.\n"
+                        "2. Periksa apakah ada guru mapel sama yang bentrok jam MGMP-nya pada hari yang sama.\n"
                         "3. Naikkan nilai **Waktu Pencarian Maksimal** pada sidebar kiri."
                     )
 
