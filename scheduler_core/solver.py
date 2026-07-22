@@ -142,6 +142,7 @@ class SchedulerSolver:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
             rombel = t["rombel"]
+            guru = t["guru"]
             jp = t["jp"]
 
             # Total jam mengajar harus sama dengan JP
@@ -150,6 +151,14 @@ class SchedulerSolver:
             )
             # Setiap blok tugas hanya aktif di 1 hari
             self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
+
+            # ---------------------------------------------------------
+            # ATURAN KHUSUS GURU G32 (HANYA MENGAJAR HARI KAMIS)
+            # ---------------------------------------------------------
+            if guru == "G32":
+                for hari in self.list_hari:
+                    if hari.strip().lower() != "kamis":
+                        self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
             # ---------------------------------------------------------
             # ATURAN KHUSUS M01 PADA HARI KAMIS
@@ -164,7 +173,6 @@ class SchedulerSolver:
                     target_jam = [7, 8, 9]
 
                 if target_jam:
-                    # Kunci tugas aktif di Hari Kamis
                     self.model.Add(tugas_hari_aktif[(t_id, kamis_key)] == 1)
                     for jam in self.jam_per_hari[kamis_key]:
                         if jam in target_jam:
@@ -180,6 +188,26 @@ class SchedulerSolver:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
         # -------------------------------------------------------------
+        # BATAS MAKSIMAL MENGAJAR GURU PER HARI (MAX 8 JP HARD, MAX 6 JP SOFT)
+        # -------------------------------------------------------------
+        for guru in self.list_guru:
+            tugas_guru = [t for t in self.tugas_mengajar if t["guru"] == guru]
+            if tugas_guru:
+                for hari in self.list_hari:
+                    total_jam_guru_hari = sum(
+                        self.variables[(t["id_tugas"], hari, jam)]
+                        for t in tugas_guru
+                        for jam in self.jam_per_hari[hari]
+                    )
+                    # Hard Constraint: Mutlak tidak boleh lebih dari 8 JP dalam sehari
+                    self.model.Add(total_jam_guru_hari <= 8)
+
+                    # Soft Constraint: Berikan penalti jika mengajar lebih dari 6 JP dalam sehari
+                    over_6_var = self.model.NewIntVar(0, 2, f"over6_{guru}_{hari}")
+                    self.model.Add(over_6_var >= total_jam_guru_hari - 6)
+                    self.penalties.append(over_6_var * 20000)
+
+        # -------------------------------------------------------------
         # SOFT CONSTRAINTS: KELAS 9 UNTUK MAPEL M09 & M10
         # Diutamakan pada Jam ke 1-2, 3-4, dan 6
         # -------------------------------------------------------------
@@ -193,7 +221,6 @@ class SchedulerSolver:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam not in jam_diutamakan_kelas9:
-                            # Beri penalti tinggi jika M09 / M10 kelas 9 ditaruh di jam ke 5, 7, 8, dst.
                             self.penalties.append(self.variables[(t_id, hari, jam)] * 10000)
 
         # -------------------------------------------------------------
