@@ -1,153 +1,194 @@
 import io
+import os
+import sys
 import pandas as pd
 import streamlit as st
-from scheduler_engine import Scheduler
 
-st.set_page_config(page_title="AI Scheduler", page_icon="🤖", layout="wide")
+# ==========================================
+# 1. PERBAIKAN IMPORT PATH (MENCEGAH ERROR)
+# ==========================================
+# Menambahkan root folder ke sys.path agar file di folder pages/ bisa membaca scheduler_engine.py
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 
-st.title("🤖 AI Scheduler")
-st.markdown("Modul AI Penjadwalan Otomatis (Format Ekspor Multi-Sheet Per Kelas).")
+# Import engine solver
+try:
+    from scheduler_engine import (
+        SchedulerSolver,
+        execute_scheduler_with_fallback,
+    )
+except ImportError as e:
+    st.error(
+        f"❌ **Gagal Mengimpor Engine Solver**: {e}\n\n"
+        "Pastikan file `scheduler_engine.py` berada di folder utama (root) repository Anda."
+    )
+    st.stop()
 
-st.sidebar.header("⚙️ Pengaturan Solver")
-timeout_seconds = st.sidebar.number_input(
-    "Waktu Pencarian Maksimal (Detik)",
-    min_value=30,
-    max_value=600,
-    value=180,
-    step=30,
+# ==========================================
+# 2. KONFIGURASI HALAMAN STREAMLIT
+# ==========================================
+st.set_page_config(
+    page_title="AI Scheduler Engine", page_icon="🤖", layout="wide"
 )
 
-st.subheader("1. Unggah File Master Excel")
-uploaded_file = st.file_uploader("Pilih file Excel jadwal master", type=["xlsx"])
+st.title("🤖 AI Scheduler - Generator Jadwal Otomatis")
+st.caption(
+    "Optimasi pembuatan jadwal KBM menggunakan CP-SAT Constraint Programming Solver"
+)
+st.markdown("---")
 
-def get_col(df, possible_names):
-    for name in possible_names:
-        for col in df.columns:
-            if str(col).strip().lower().replace("_", " ") == name.lower().replace("_", " "):
-                return col
-    return df.columns[0]
+# ==========================================
+# 3. VERIFIKASI DATA DI SESSION STATE
+# ==========================================
+# Memastikan objek 'scheduler' atau dataset sudah ada di session state Streamlit
+if "scheduler" not in st.session_state:
+    st.warning(
+        "⚠️ **Data Master Belum Siap!**\n\n"
+        "Silakan unggah dan siapkan data master (Guru, Rombel, Mengajar, Mapel, Slot) di menu awal sebelum menjalankan AI Generator."
+    )
+    st.stop()
 
-if uploaded_file:
-    try:
-        excel_file = pd.ExcelFile(uploaded_file)
-        sheet_names = excel_file.sheet_names
+scheduler_data = st.session_state["scheduler"]
 
-        required_sheets = ["Guru", "Rombel", "Mengajar", "Mapel", "Slot"]
-        missing_sheets = [s for s in required_sheets if s not in sheet_names]
+# ==========================================
+# 4. SIDEBAR - PANEL KONTROL SOLVER
+# ==========================================
+st.sidebar.header("⚙️ Pengaturan Solver")
+timeout_sec = st.sidebar.slider(
+    "Timeout Max per Skenario (Detik)",
+    min_value=30,
+    max_value=300,
+    value=90,
+    step=30,
+)
+max_jp_daily = st.sidebar.number_input(
+    "Batas Max JP Guru / Hari", min_value=4, max_value=10, value=6
+)
+use_fallback = st.sidebar.checkbox(
+    "Gunakan Multi-Skenario Fallback",
+    value=True,
+    help="Jika checked, solver akan melonggarkan batasan secara bertahap jika skenario awal gagal.",
+)
 
-        if missing_sheets:
-            st.error(f"❌ Sheet berikut tidak ditemukan: {', '.join(missing_sheets)}")
+st.markdown("### 📋 Status Data Master")
+col_s1, col_s2, col_s3, col_s4 = st.columns(4)
+with col_s1:
+    st.metric(
+        "Total Guru",
+        (
+            len(scheduler_data.guru)
+            if hasattr(scheduler_data, "guru")
+            else "N/A"
+        ),
+    )
+with col_s2:
+    st.metric(
+        "Total Rombel",
+        (
+            len(scheduler_data.rombel)
+            if hasattr(scheduler_data, "rombel")
+            else "N/A"
+        ),
+    )
+with col_s3:
+    st.metric(
+        "Total Matpel",
+        (
+            len(scheduler_data.mapel)
+            if hasattr(scheduler_data, "mapel")
+            else "N/A"
+        ),
+    )
+with col_s4:
+    st.metric(
+        "Tugas Mengajar",
+        (
+            len(scheduler_data.mengajar)
+            if hasattr(scheduler_data, "mengajar")
+            else "N/A"
+        ),
+    )
+
+st.markdown("---")
+
+# ==========================================
+# 5. TOMBOL EKSEKUSI GENERATE JADWAL
+# ==========================================
+if st.button("🚀 Generate Jadwal Sekarang", type="primary", use_container_width=True):
+    with st.spinner("🔍 Menjalankan Diagnostik & CP-SAT Optimization Solver..."):
+        
+        if use_fallback:
+            # Menggunakan Fallback Multi-Skenario
+            df_jadwal, df_laporan = execute_scheduler_with_fallback(scheduler_data)
         else:
-            guru_df = pd.read_excel(excel_file, "Guru")
-            rombel_df = pd.read_excel(excel_file, "Rombel")
-            mengajar_df = pd.read_excel(excel_file, "Mengajar")
-            mapel_df = pd.read_excel(excel_file, "Mapel")
-            slot_df = pd.read_excel(excel_file, "Slot")
-
-            st.success("✅ Seluruh sheet master berhasil dibaca!")
-
-            # Hitung Slot Pembelajaran
-            col_jenis = next((c for c in slot_df.columns if str(c).strip().lower() == "jenis"), None)
-            if col_jenis:
-                slot_pembelajaran_count = len(slot_df[slot_df[col_jenis].astype(str).str.strip().str.upper() == "PEMBELAJARAN"])
+            # Menggunakan Skenario Manual Tunggal
+            solver_single = SchedulerSolver(scheduler_data)
+            success = solver_single.run_solver(
+                timeout_seconds=timeout_sec,
+                max_jam_mgmp_nongtt=4,
+                max_jp_per_hari=max_jp_daily
+            )
+            if success:
+                df_jadwal = solver_single.extract_results()
+                df_laporan = solver_single.generate_teacher_report(df_jadwal)
             else:
-                slot_pembelajaran_count = len(slot_df)
+                df_jadwal, df_laporan = pd.DataFrame(), pd.DataFrame()
 
-            col1, col2, col3, col4 = st.columns(4)
-            col1.metric("Total Guru", len(guru_df))
-            col2.metric("Total Rombel", len(rombel_df))
-            col3.metric("Total Tugas Mengajar", len(mengajar_df))
-            col4.metric("Total Slot Pembelajaran", slot_pembelajaran_count)
+    # Simpan hasil ke session_state agar tidak hilang saat rerun UI
+    if not df_jadwal.empty:
+        st.session_state["df_jadwal_hasil"] = df_jadwal
+        st.session_state["df_laporan_guru"] = df_laporan
+        st.success("🎉 **Penjadwalan Berhasil Dibuat Tanpa Bentrok!**")
+    else:
+        st.error(
+            "❌ **Solver Gagal Menemukan Solusi!**\n\n"
+            "**Saran Perbaikan:**\n"
+            "1. Aktifkan centang **'Gunakan Multi-Skenario Fallback'** di sidebar.\n"
+            "2. Naikkan **Batas Max JP Guru / Hari**.\n"
+            "3. Periksa apakah ada total JP Rombel yang melebihi ketersediaan jam slot KBM."
+        )
 
-            st.markdown("---")
-            st.subheader("2. Eksekusi AI Solver")
+# ==========================================
+# 6. TAMPILAN HASIL & EKSKASI DATA
+# ==========================================
+if "df_jadwal_hasil" in st.session_state and not st.session_state["df_jadwal_hasil"].empty:
+    df_jadwal = st.session_state["df_jadwal_hasil"]
+    df_laporan = st.session_state["df_laporan_guru"]
 
-            if st.button("🚀 Jalankan Penjadwalan Otomatis", type="primary"):
-                status_box = st.empty()
-                progress_bar = st.progress(0)
+    tab1, tab2, tab3 = st.tabs(["📅 Jadwal Master", "👨‍🏫 Laporan Beban Guru", "📥 Export Hasil"])
 
-                def update_status_callback(pesan):
-                    status_box.info(f"⏳ **Proses:** {pesan}")
+    with tab1:
+        st.subheader("📌 Matriks Jadwal Pelajaran Utama")
+        
+        # Filter Rombel
+        selected_rombel = st.selectbox("Pilih Rombel / Kelas:", ["Semua Rombel"] + sorted(df_jadwal["ID_Rombel"].unique().tolist()))
+        
+        if selected_rombel != "Semua Rombel":
+            df_view = df_jadwal[df_jadwal["ID_Rombel"] == selected_rombel]
+        else:
+            df_view = df_jadwal
 
-                scheduler = Scheduler(guru_df, rombel_df, mengajar_df, mapel_df, slot_df)
-                success, df_hasil, df_laporan_guru, desc_skenario = scheduler.solve_with_fallback(
-                    timeout_total=timeout_seconds,
-                    progress_callback=update_status_callback
-                )
+        st.dataframe(df_view, use_container_width=True, hide_index=True)
 
-                progress_bar.progress(100)
+    with tab2:
+        st.subheader("📊 Rekapitulasi Alokasi Mengajar Guru")
+        st.dataframe(df_laporan, use_container_width=True, hide_index=True)
 
-                if success and not df_hasil.empty:
-                    status_box.success(f"🎉 **Penjadwalan Berhasil!** ({desc_skenario})")
-
-                    # Mapping Nama Guru & Mapel
-                    col_guru_id = get_col(guru_df, ["ID_Guru", "ID Guru", "Guru"])
-                    col_guru_nama = get_col(guru_df, ["Nama_Guru", "Nama Guru", "Nama"])
-                    guru_map = dict(zip(guru_df[col_guru_id].astype(str).str.strip(), guru_df[col_guru_nama].astype(str).str.strip()))
-
-                    col_mapel_id = get_col(mapel_df, ["ID_Mapel", "ID Mapel", "Mapel"])
-                    col_mapel_nama = get_col(mapel_df, ["Nama_Mapel", "Nama Mapel", "Mata Pelajaran", "Nama"])
-                    mapel_map = dict(zip(mapel_df[col_mapel_id].astype(str).str.strip(), mapel_df[col_mapel_nama].astype(str).str.strip()))
-
-                    df_master = df_hasil.copy()
-                    df_master["Nama Guru"] = df_master["ID_Guru"].astype(str).str.strip().map(guru_map).fillna(df_master["ID_Guru"])
-                    df_master["Mata Pelajaran"] = df_master["ID_Mapel"].astype(str).str.strip().map(mapel_map).fillna(df_master["ID_Mapel"])
-
-                    df_master_export = df_master[["Hari", "Jam_Ke", "ID_Rombel", "Nama Guru", "Mata Pelajaran"]].rename(
-                        columns={"Jam_Ke": "Jam Ke", "ID_Rombel": "Kelas / Rombel"}
-                    )
-
-                    st.markdown("---")
-                    st.subheader("📊 Hasil Penjadwalan")
-
-                    tab1, tab2, tab3 = st.tabs(["📋 Jadwal Semua Kelas", "🏫 Pratinjau Per Kelas", "📥 Download Excel Multi-Sheet"])
-
-                    with tab1:
-                        st.markdown("##### Tabel Master: `Jadwal_Semua_Kelas`")
-                        st.dataframe(df_master_export, use_container_width=True)
-
-                    with tab2:
-                        list_rombel = sorted(df_master["ID_Rombel"].unique().tolist())
-                        selected_kelas = st.selectbox("Pilih Kelas / Rombel:", list_rombel)
-
-                        df_kelas = df_master[df_master["ID_Rombel"] == selected_kelas]
-                        pivot_kelas = df_kelas.pivot_table(
-                            index="Jam_Ke",
-                            columns="Hari",
-                            values="Nama Guru",
-                            aggfunc="first"
-                        ).fillna("-")
-
-                        st.markdown(f"##### Matriks Jadwal **Kelas {selected_kelas}**")
-                        st.dataframe(pivot_kelas, use_container_width=True)
-
-                    with tab3:
-                        output = io.BytesIO()
-                        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                            df_master_export.to_excel(writer, sheet_name="Jadwal_Semua_Kelas", index=False)
-
-                            list_rombel = sorted(df_master["ID_Rombel"].unique().tolist())
-                            for r in list_rombel:
-                                df_r = df_master[df_master["ID_Rombel"] == r]
-                                pivot_r = df_r.pivot_table(
-                                    index="Jam_Ke",
-                                    columns="Hari",
-                                    values="Nama Guru",
-                                    aggfunc="first"
-                                ).reset_index()
-
-                                pivot_r.to_excel(writer, sheet_name=f"Kelas_{r}", index=False)
-
-                            df_laporan_guru.to_excel(writer, sheet_name="Laporan_Beban_Guru", index=False)
-
-                        st.download_button(
-                            label="📥 Download Excel (Format Multi-Sheet Per Kelas)",
-                            data=output.getvalue(),
-                            file_name="Jadwal_Pelajaran_Lengkap.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        )
-                else:
-                    status_box.error("❌ **Solver Gagal Menemukan Solusi.**")
-
-    except Exception as e:
-        st.error(f"Terjadi kesalahan saat membaca file: {str(e)}")
+    with tab3:
+        st.subheader("📥 Unduh Laporan Excel / CSV")
+        
+        # Buat File Excel di Memory
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
+            df_jadwal.to_excel(writer, sheet_name="Jadwal_Master", index=False)
+            df_laporan.to_excel(writer, sheet_name="Laporan_Guru", index=False)
+        
+        st.download_button(
+            label="📦 Download File Excel (.xlsx)",
+            data=buffer.getvalue(),
+            file_name="Jadwal_KBM_Sekolah.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
