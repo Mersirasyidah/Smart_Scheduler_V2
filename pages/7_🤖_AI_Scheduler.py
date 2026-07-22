@@ -7,9 +7,14 @@ from scheduler_engine import Scheduler
 st.set_page_config(page_title="AI Scheduler Engine", layout="wide")
 st.title("🤖 AI Scheduler Engine")
 
-def auto_load_data():
-    """Fungsi otomatis untuk mengambil data dari Database SQLite atau Folder Data"""
-    # 1. Coba Ambil dari Database SQLite (jika aplikasi Anda pakai DB)
+# 1. Inisialisasi Key Session State Agar Tidak Terjadi KeyError
+REQUIRED_KEYS = ["guru_df", "rombel_df", "mengajar_df", "mapel_df", "slot_df"]
+for key in REQUIRED_KEYS:
+    if key not in st.session_state:
+        st.session_state[key] = None
+
+def load_data_from_database():
+    """Mencoba membaca data dari SQLite jika ada"""
     db_paths = ["database.db", "data/database.db", "smart_scheduler.db"]
     for db_path in db_paths:
         if os.path.exists(db_path):
@@ -24,8 +29,10 @@ def auto_load_data():
                 return True
             except Exception:
                 pass
+    return False
 
-    # 2. Coba Ambil dari File CSV di folder data/
+def load_data_from_files():
+    """Mencoba membaca file CSV/Excel dari folder data/"""
     try:
         st.session_state["guru_df"] = pd.read_csv("data/guru.csv")
         st.session_state["rombel_df"] = pd.read_csv("data/rombel.csv")
@@ -35,34 +42,28 @@ def auto_load_data():
         return True
     except Exception:
         pass
-
-    # 3. Coba Ambil dari database.py jika ada fungsi khusus getter
-    try:
-        import database as db
-        st.session_state["guru_df"] = db.get_guru()
-        st.session_state["rombel_df"] = db.get_rombel()
-        st.session_state["mengajar_df"] = db.get_mengajar()
-        st.session_state["mapel_df"] = db.get_mapel()
-        st.session_state["slot_df"] = db.get_slot()
-        return True
-    except Exception:
-        pass
-
     return False
 
-# Jalankan auto-load jika session_state belum berisi data
-if "guru_df" not in st.session_state or st.session_state["guru_df"] is None:
-    auto_load_data()
+# Cek apakah data sudah lengkap di memori
+def is_data_ready():
+    return all(st.session_state.get(k) is not None and not st.session_state.get(k).empty for k in REQUIRED_KEYS)
 
-# --- CEK KETERSEDIAAN DATA ---
-if "guru_df" in st.session_state and st.session_state["guru_df"] is not None and not st.session_state["guru_df"].empty:
+# Auto Load jika data belum ada
+if not is_data_ready():
+    if not load_data_from_database():
+        load_data_from_files()
+
+# --- TAMPILAN UTAMA ---
+if is_data_ready():
+    st.success("✅ Semua Data Master Berhasil Dimuat!")
+
+    # Mengambil dataframe dengan aman
     guru_df = st.session_state["guru_df"]
     rombel_df = st.session_state["rombel_df"]
     mengajar_df = st.session_state["mengajar_df"]
     mapel_df = st.session_state["mapel_df"]
     slot_df = st.session_state["slot_df"]
 
-    st.success("✅ Data Master Berhasil Dimuat!")
     timeout_seconds = st.slider("Timeout Optimization (detik)", 30, 300, 120)
 
     if st.button("🚀 Generate Jadwal & Laporan Guru"):
@@ -114,7 +115,21 @@ if "guru_df" in st.session_state and st.session_state["guru_df"] is not None and
                     mime="text/csv"
                 )
         else:
-            st.error("❌ Solver gagal menemukan kombinasi jadwal. Coba naikkan durasi Timeout.")
+            st.error("❌ Solver gagal menemukan kombinasi jadwal. Silakan naikkan durasi Timeout.")
+
 else:
-    st.warning("⚠️ Data Master belum dimuat ke memori.")
-    st.info("📌 **Cara Mengatasi:** Buka menu **Data Input / Upload / Database** di sidebar terlebih dahulu untuk memuat data master, lalu kembali ke halaman ini.")
+    st.warning("⚠️ Data Master belum lengkap di memori. Unggah file Excel gabungan (yang berisi sheet Guru, Rombel, Mengajar, Mapel, Slot) di bawah ini:")
+    
+    uploaded_file = st.file_uploader("Upload Excel Data Master", type=["xlsx", "xls"])
+    if uploaded_file is not None:
+        try:
+            excel = pd.ExcelFile(uploaded_file)
+            st.session_state["guru_df"] = pd.read_excel(excel, "Guru")
+            st.session_state["rombel_df"] = pd.read_excel(excel, "Rombel")
+            st.session_state["mengajar_df"] = pd.read_excel(excel, "Mengajar")
+            st.session_state["mapel_df"] = pd.read_excel(excel, "Mapel")
+            st.session_state["slot_df"] = pd.read_excel(excel, "Slot")
+            st.success("✅ File berhasil diunggah! Klik tombol Rerun atau refresh halaman.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Gagal membaca sheet dari Excel: {e}")
