@@ -31,42 +31,61 @@ class Scheduler:
                     return col
         return df.columns[0]
 
-    def _parse_blok(self, val_blok, total_jp):
-        """Memecah nilai kolom 'Blok' (misal '2,2' atau '3,2') dengan fallback otomatis jika tidak presisi."""
-        if pd.isna(val_blok) or not str(val_blok).strip():
-            # Jika kosong: pecah standar 2 JP per pertemuan
+    def _parse_blok(self, val_blok, total_jp, mapel_code):
+        """
+        Aturan Blok Jam:
+        1. Jika mapel_code == 'M05' dan total_jp == 3: Wajib dipecah [2, 1]
+        2. Jika total_jp == 3 (selain M05): Wajib utuh [3]
+        3. Untuk total_jp lainnya, baca kolom Blok pada Excel. Jika kosong, gunakan pecahan ideal.
+        """
+        mapel_clean = str(mapel_code).strip().upper()
+
+        # Aturan Khusus M05 (3 JP -> dipecah 2, 1)
+        if mapel_clean == "M05" and total_jp == 3:
+            return [2, 1]
+
+        # Aturan Umum Mapel 3 JP -> Langsung 3 JP Utuh
+        if total_jp == 3 and (
+            pd.isna(val_blok) or not str(val_blok).strip() or mapel_clean != "M05"
+        ):
+            # Jika di excel tidak ditulis beda secara spesifik, default 3 JP utuh
+            if pd.isna(val_blok) or not str(val_blok).strip():
+                return [3]
+
+        # Pembacaan Nilai Kolom 'Blok' dari Sheet Mapel jika diisi manual
+        if pd.notna(val_blok) and str(val_blok).strip():
+            s_val = str(val_blok).replace(";", ",").replace("-", ",")
+            parts = [p.strip() for p in s_val.split(",") if p.strip()]
+
+            durations = []
+            for p in parts:
+                try:
+                    dur = int(p)
+                    if dur > 0:
+                        durations.append(dur)
+                except ValueError:
+                    pass
+
+            # Gunakan jika total penjumlahan blok di Excel persis sama dengan Beban JP
+            if sum(durations) == total_jp and len(durations) > 0:
+                return durations
+
+        # Fallback Generator Otomatis jika kolom Blok kosong:
+        # Misal 5 JP -> [3, 2], 4 JP -> [2, 2], 2 JP -> [2]
+        if total_jp == 3:
+            return [3]
+        elif total_jp == 5:
+            return [3, 2]
+        elif total_jp == 4:
+            return [2, 2]
+        else:
             res = []
             rem = total_jp
             while rem > 0:
-                take = min(2, rem)
+                take = min(3 if rem >= 3 else 2, rem)
                 res.append(take)
                 rem -= take
             return res
-
-        s_val = str(val_blok).replace(";", ",").replace("-", ",")
-        parts = [p.strip() for p in s_val.split(",") if p.strip()]
-
-        durations = []
-        for p in parts:
-            try:
-                dur = int(p)
-                if dur > 0:
-                    durations.append(dur)
-            except ValueError:
-                pass
-
-        # Jika total blok cocok dengan total beban JP
-        if sum(durations) == total_jp and len(durations) > 0:
-            return durations
-
-        # Fallback jika penjumlahan blok di Excel tidak cocok dengan Beban JP
-        res = []
-        rem = total_jp
-        while rem > 0:
-            take = min(3 if rem == 3 else 2, rem)
-            res.append(take)
-            rem -= take
-        return res
 
     def _solve_skenario(
         self, timeout_sec, strict_mgmp=True, allow_same_day_multisession=False
@@ -148,7 +167,7 @@ class Scheduler:
             )
         slot_tuples = sorted(list(set(slot_tuples)))
 
-        # 2. Pecah Tugas Mengajar Menjadi Sesi Sesuai Kolom Blok
+        # 2. Pecah Tugas Mengajar Menjadi Sesi Mengikuti Logika 3 JP & M05
         sessions = []
         for idx, row in self.mengajar_df.iterrows():
             rombel = str(row[col_mengajar_rombel]).strip()
@@ -157,7 +176,7 @@ class Scheduler:
             total_jp = int(row[col_mengajar_jp])
 
             raw_blok = blok_map.get(mapel, None)
-            durations = self._parse_blok(raw_blok, total_jp)
+            durations = self._parse_blok(raw_blok, total_jp, mapel_code=mapel)
 
             for s_idx, dur in enumerate(durations):
                 sessions.append(
@@ -199,7 +218,7 @@ class Scheduler:
                     if not valid_block:
                         model.Add(S[(s_id, h, j)] == 0)
                     else:
-                        # Jika Sesi dimulai di (h, j), kunci jam j s.d. j+dur-1
+                        # Jika Sesi dimulai di (h, j), kunci jam j s.d. j+dur-1 secara kontinu
                         for bj in block_j:
                             model.Add(
                                 X[(s_id, h, bj)] == 1
@@ -339,12 +358,12 @@ class Scheduler:
             return False, pd.DataFrame(), pd.DataFrame()
 
     def solve_with_fallback(self, timeout_total=180, progress_callback=None):
-        """Strategi bertahap agar solver selalu menemukan jalan keluar."""
+        """Strategi bertahap solver."""
 
         # Stage 1: Strict MGMP & 1 Sesi Mapel per Hari
         if progress_callback:
             progress_callback(
-                "Tahap 1: Memproses skema Blok Mapel & MGMP Strict..."
+                "Tahap 1: Memproses jadwal (3 JP Utuh & M05 dipecah 2,1)..."
             )
         t1 = max(20, int(timeout_total * 0.5))
         success, df_res, df_lap = self._solve_skenario(
