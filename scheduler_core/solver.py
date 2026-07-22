@@ -167,21 +167,19 @@ class SchedulerSolver:
                             self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
 
             # ---------------------------------------------------------
-            # KHUSUS KELAS 8 DAN 9: MAPEL M09 & M10
-            # - Pembatasan Jam 1-4 untuk blok > 1 JP
-            # - Batas maksimal Jam ke-6 untuk blok 1 JP
+            # ATURAN M09 & M10: KHUSUS KELAS 9 SAJA
+            # - Blok > 1 JP: Jam 1–4 saja (TIDAK BOLEH > Jam 4)
+            # - Blok 1 JP  : Boleh s/d Jam ke-6 (TIDAK BOLEH > Jam 6)
+            # - Kelas 7 & 8: Bebas mengikuti slot reguler
             # ---------------------------------------------------------
-            is_kelas_8_atau_9 = rombel.startswith("8") or rombel.startswith("9")
+            is_kelas_9 = rombel.startswith("9")
 
-            if mapel in target_mapel_m09_m10:
+            if mapel in target_mapel_m09_m10 and is_kelas_9:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
-                        # Tidak boleh melebihi jam ke-6 untuk semua kelas
-                        if jam > 6:
+                        if jp > 1 and jam > 4:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
-                        
-                        # Khusus Kelas 8 & 9: jika > 1 JP dipaksa di Jam 1-4 saja
-                        if is_kelas_8_atau_9 and jp > 1 and jam > 4:
+                        elif jp == 1 and jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
             # PJOK Jam Maksimal Jam ke-6
