@@ -246,12 +246,12 @@ class SchedulerSolver:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_rombel) <= 1)
 
-        # Bentrok Guru Antar Sesama Kelas 9
+        # Bentrok Guru Antar Sesama Kelas 9 (SUDAH DIPERBAIKI)
         for guru in self.list_guru:
             tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
-                    self.model.Add(sum(self.variables[(t_id, hari, jam)] = 1) <= 1)
+                    self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_guru) <= 1)
 
         # Blok Jam Berurutan (Sliding Window)
         for t in self.tugas_mengajar:
