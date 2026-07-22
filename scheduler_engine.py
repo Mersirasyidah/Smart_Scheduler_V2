@@ -12,7 +12,7 @@ class SchedulerSolver:
         self.mapel = scheduler.mapel.copy()
         self.slot = scheduler.slot.copy()
 
-        # Standardisasi kolom
+        # Standardisasi Nama Kolom
         for df in [self.guru, self.rombel, self.mengajar, self.mapel, self.slot]:
             df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
 
@@ -114,10 +114,19 @@ class SchedulerSolver:
                     )
                     tugas_id += 1
 
-        # Mapping Libur / MGMP Guru
+        # Pemetaan Hari Libur & Status GTT Guru
         self.guru_mgmp_dict = {}
+        self.guru_gtt_set = set()
+
         for _, row in self.guru.iterrows():
             g_id = str(row["ID_Guru"]).strip()
+
+            # Deteksi Status GTT
+            status_guru = str(row.get("Status", row.get("Status_Guru", ""))).strip().upper()
+            if "GTT" in status_guru or "HONOR" in status_guru or "G33" in g_id: # Menyertakan G33 sebagai GTT
+                self.guru_gtt_set.add(g_id)
+
+            # Deteksi Hari MGMP / Libur
             for col_mgmp in ["Hari_MGMP", "Hari_Libur", "Libur", "MGMP"]:
                 if col_mgmp in row and pd.notna(row[col_mgmp]):
                     val = str(row[col_mgmp]).strip()
@@ -125,12 +134,11 @@ class SchedulerSolver:
                         self.guru_mgmp_dict[g_id] = val
                         break
 
-    def build_and_solve(self, timeout_seconds=60, max_jp_limit=6):
+    def build_and_solve(self, timeout_seconds=120, max_jp_limit=6, max_jam_mgmp_reguler=4):
         model = cp_model.CpModel()
         variables = {}
-        penalties = []
 
-        # Variabel Utama
+        # 1. Inisialisasi Variabel Utama
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             for hari in self.list_hari:
@@ -155,7 +163,7 @@ class SchedulerSolver:
                 else:
                     model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
-        # 1. ATURAN HARD: Beban JP Harus Terpenuhi & Cuma 1 Hari per Blok Tugas
+        # 2. Hard Constraint: Alokasi total JP dan 1 hari per blok tugas
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             model.Add(
@@ -170,7 +178,7 @@ class SchedulerSolver:
                 sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1
             )
 
-        # 2. ATURAN HARD: DILARANG MENGAJAR DI HARI LIBUR / MGMP
+        # 3. ATURAN HARI MGMP (DIBEDAKAN ANTARA GTT DAN REGULER)
         for guru, hari_libur in self.guru_mgmp_dict.items():
             target_hari = next(
                 (h for h in self.list_hari if h.lower() == hari_libur.lower()), None
@@ -179,44 +187,20 @@ class SchedulerSolver:
                 tugas_guru = [
                     t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru
                 ]
+                is_gtt = guru in self.guru_gtt_set
+
                 for t_id in tugas_guru:
                     for jam in self.jam_per_hari.get(target_hari, []):
                         if (t_id, target_hari, jam) in variables:
-                            model.Add(variables[(t_id, target_hari, jam)] == 0)
+                            if is_gtt:
+                                # Guru GTT: DILARANG MENGAJAR SAMA SEKALI (Libur Full)
+                                model.Add(variables[(t_id, target_hari, jam)] == 0)
+                            else:
+                                # Guru Reguler: Boleh mengajar hanya sampai jam tertentu (misal max Jam ke-4)
+                                if jam > max_jam_mgmp_reguler:
+                                    model.Add(variables[(t_id, target_hari, jam)] == 0)
 
-        # 3. ATURAN HARD: Tidak Bentrok Rombel
-        for rombel in self.list_rombel:
-            tugas_rombel = [
-                t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel
-            ]
-            for hari in self.list_hari:
-                for jam in self.jam_per_hari.get(hari, []):
-                    model.Add(
-                        sum(
-                            variables[(t_id, hari, jam)]
-                            for t_id in tugas_rombel
-                            if (t_id, hari, jam) in variables
-                        )
-                        <= 1
-                    )
-
-        # 4. ATURAN HARD: Tidak Bentrok Guru
-        for guru in self.list_guru:
-            tugas_guru = [
-                t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru
-            ]
-            for hari in self.list_hari:
-                for jam in self.jam_per_hari.get(hari, []):
-                    model.Add(
-                        sum(
-                            variables[(t_id, hari, jam)]
-                            for t_id in tugas_guru
-                            if (t_id, hari, jam) in variables
-                        )
-                        <= 1
-                    )
-
-        # 5. ATURAN BATAS MAX JP PER HARI PER GURU
+        # 4. Batas Maksimal JP per Hari per Guru
         for guru in self.list_guru:
             tugas_guru = [
                 t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru
@@ -234,7 +218,39 @@ class SchedulerSolver:
                         <= max_jp_limit
                     )
 
-        # 6. JAM BERURUTAN (Blok JP)
+        # 5. Tidak Bentrok Rombel
+        for rombel in self.list_rombel:
+            tugas_rombel = [
+                t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel
+            ]
+            for hari in self.list_hari:
+                for jam in self.jam_per_hari.get(hari, []):
+                    model.Add(
+                        sum(
+                            variables[(t_id, hari, jam)]
+                            for t_id in tugas_rombel
+                            if (t_id, hari, jam) in variables
+                        )
+                        <= 1
+                    )
+
+        # 6. Tidak Bentrok Guru
+        for guru in self.list_guru:
+            tugas_guru = [
+                t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru
+            ]
+            for hari in self.list_hari:
+                for jam in self.jam_per_hari.get(hari, []):
+                    model.Add(
+                        sum(
+                            variables[(t_id, hari, jam)]
+                            for t_id in tugas_guru
+                            if (t_id, hari, jam) in variables
+                        )
+                        <= 1
+                    )
+
+        # 7. Jam Berurutan (Block Schedule)
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             target_jp = t["jp"]
@@ -259,6 +275,7 @@ class SchedulerSolver:
                     else:
                         model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
+        # Jalankan Solver
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = timeout_seconds
         solver.parameters.num_search_workers = 4
@@ -281,18 +298,25 @@ class SchedulerEngine:
     def generate(self, timeout=120):
         solver_obj = SchedulerSolver(self)
 
-        # METODE STRATEGI BERTAHAP (FALLBACK)
-        # 1. Coba Max 6 JP per hari
-        # 2. Jika gagal, coba Max 7 JP per hari
-        # 3. Jika gagal, coba Max 8 JP per hari
-        for limit_jp in [6, 7, 8]:
-            print(f"Mencoba mencari jadwal dengan batas max {limit_jp} JP/hari...")
+        # Coba bertahap:
+        # 1. Batas 6 JP/hari, Guru Reguler MGMP max sampai Jam ke-4
+        # 2. Batas 6 JP/hari, Guru Reguler MGMP max sampai Jam ke-3 (jika opsi 1 kurang pas)
+        # 3. Batas 7 JP/hari sebagai cadangan terakhir
+        skenario = [
+            {"max_jp": 6, "max_jam_mgmp": 4},
+            {"max_jp": 6, "max_jam_mgmp": 3},
+            {"max_jp": 7, "max_jam_mgmp": 4},
+        ]
+
+        for config in skenario:
+            print(f"Memproses: Max {config['max_jp']} JP/hari | Guru MGMP Reguler Max Jam ke-{config['max_jam_mgmp']}")
             solver, variables = solver_obj.build_and_solve(
-                timeout_seconds=timeout // 3, max_jp_limit=limit_jp
+                timeout_seconds=timeout // len(skenario),
+                max_jp_limit=config["max_jp"],
+                max_jam_mgmp_reguler=config["max_jam_mgmp"]
             )
 
             if solver is not None:
-                # Ekstraksi Hasil
                 rows = []
                 tugas_lookup = {t["id_tugas"]: t for t in solver_obj.tugas_mengajar}
                 for (t_id, hari, jam), var in variables.items():
@@ -314,7 +338,6 @@ class SchedulerEngine:
                     .reset_index(drop=True)
                 )
 
-                # Generate Rekap Laporan Guru
                 df_laporan_guru = (
                     df_hasil.groupby(["ID_Guru", "Hari"])
                     .agg(
@@ -329,7 +352,6 @@ class SchedulerEngine:
 
                 return df_hasil, df_laporan_guru
 
-        # Jika 6, 7, dan 8 JP tetap gagal
         return pd.DataFrame(), pd.DataFrame()
 
 
