@@ -128,7 +128,8 @@ class SchedulerSolver:
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             for hari in self.list_hari:
-                tugas_hari_aktif[(t_id, hari)] = self.model.NewBoolVar(f_aktif_t_{t_id}_{hari}")
+                # DIBERSIHKAN: Syntax string diperbaiki di baris ini
+                tugas_hari_aktif[(t_id, hari)] = self.model.NewBoolVar(f"aktif_t_{t_id}_{hari}")
                 self.model.AddMaxEquality(
                     tugas_hari_aktif[(t_id, hari)],
                     [self.variables[(t_id, hari, jam)] for jam in self.jam_per_hari[hari]]
@@ -140,7 +141,7 @@ class SchedulerSolver:
         # =============================================================
         # BLOK KETERSEDIAAN DARI JADWAL KELAS 7 & 8 (PRE-OCCUPIED SLOTS)
         # =============================================================
-        guru_sibuk_existing = set() # Store (guru, hari, jam)
+        guru_sibuk_existing = set()  # Store (guru, hari, jam)
         if not self.df_existing.empty:
             jam_col = "Jam_Ke" if "Jam_Ke" in self.df_existing.columns else "Jam"
             rombel_col = "ID_Rombel" if "ID_Rombel" in self.df_existing.columns else "Kelas"
@@ -178,7 +179,7 @@ class SchedulerSolver:
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     if (guru, hari, jam) in guru_sibuk_existing:
-                        # Guru sedang mengajar di Kelas 7/8 pada jam ini, KELAS 9 DILARAANG!
+                        # Guru sedang mengajar di Kelas 7/8 pada jam ini, KELAS 9 DILARANG!
                         self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
             # ---------------------------------------------------------
