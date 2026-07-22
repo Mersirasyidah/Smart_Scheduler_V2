@@ -29,11 +29,10 @@ class Scheduler:
                 df.columns = [str(c).strip() for c in df.columns]
 
     def _get_safe_col(self, df, keywords):
-        """Mencari nama kolom berdasarkan kata kunci tanpa pernah memicu KeyError."""
+        """Mencari nama kolom berdasarkan kata kunci tanpa KeyError."""
         if df.empty:
             return None
 
-        # 1. Matching Exact (Abaikan besar-kecil huruf dan karakter pemisah)
         for kw in keywords:
             for col in df.columns:
                 c_clean = (
@@ -52,13 +51,11 @@ class Scheduler:
                 if c_clean == k_clean:
                     return col
 
-        # 2. Matching Partial / Substring
         for kw in keywords:
             for col in df.columns:
                 if kw.lower() in str(col).lower():
                     return col
 
-        # 3. Fallback: Kembalikan kolom pertama agar aman
         return df.columns[0] if len(df.columns) > 0 else None
 
     def _parse_blok(self, val_blok, total_jp, allow_split_3jp=False):
@@ -100,6 +97,7 @@ class Scheduler:
         strict_m08=True,
         allow_same_day_multisession=False,
         allow_split_3jp=False,
+        max_mapel_per_hari=5,  # Batasan Maksimal Mapel per Hari (Default: 5)
     ):
         model = cp_model.CpModel()
 
@@ -132,7 +130,6 @@ class Scheduler:
             self.slot_df, ["jenis", "tipe", "keterangan", "status"]
         )
 
-        # Validasi minimal data
         if self.mengajar_df.empty or self.slot_df.empty:
             return False, pd.DataFrame(), pd.DataFrame()
 
@@ -186,7 +183,7 @@ class Scheduler:
                 m_id = str(r_m[c_mapel_id]).strip()
                 blok_map[m_id] = r_m[c_mapel_blok]
 
-        # Pembentukan Sesi
+        # Pembentukan Sesi Mengajar
         sessions = []
         for idx, row in self.mengajar_df.iterrows():
             rombel = str(row[c_mengajar_rombel]).strip()
@@ -217,7 +214,6 @@ class Scheduler:
         if not sessions:
             return False, pd.DataFrame(), pd.DataFrame()
 
-        # Ambil daftar unik rombel dan guru dari sesi mengajar
         rombel_list = list(set(s["rombel"] for s in sessions))
         guru_list = list(set(s["guru"] for s in sessions))
 
@@ -277,7 +273,7 @@ class Scheduler:
             for h, j in slot_tuples:
                 model.Add(sum(X[(s_id, h, j)] for s_id in s_ids_g) <= 1)
 
-        # Constraint 4: Maksimal 1 Sesi per Mapel per Hari dalam Satu Kelas
+        # Constraint 4: Mapel Sama Maksimal 1x Sehari per Rombel
         if not allow_same_day_multisession:
             for r in rombel_list:
                 mapel_in_r = set(
@@ -302,6 +298,28 @@ class Scheduler:
                                 )
                                 <= 1
                             )
+
+        # 🎯 Constraint BARU (Constraint 4B): BATASAN MAKSIMAL 5 MAPEL PER HARI PER ROMBEL
+        if max_mapel_per_hari is not None and max_mapel_per_hari > 0:
+            for r in rombel_list:
+                mapel_in_r = list(set(s["mapel"] for s in sessions if s["rombel"] == r))
+                for h in hari_list:
+                    j_in_h = [sj for (sh, sj) in slot_tuples if sh == h]
+                    mapel_present_vars = []
+                    
+                    for m in mapel_in_r:
+                        s_m = [s["session_id"] for s in sessions if s["rombel"] == r and s["mapel"] == m]
+                        has_mapel_on_day = model.NewBoolVar(f"has_m_{m}_{r}_{h}")
+                        
+                        # has_mapel_on_day = 1 JIKA ADA minimal 1 sesi mapel m di hari h
+                        sessions_on_day = [X[(s_id, h, j)] for s_id in s_m for j in j_in_h]
+                        model.Add(sum(sessions_on_day) > 0).OnlyEnforceIf(has_mapel_on_day)
+                        model.Add(sum(sessions_on_day) == 0).OnlyEnforceIf(has_mapel_on_day.Not())
+                        
+                        mapel_present_vars.append(has_mapel_on_day)
+
+                    # Total jenis mapel di hari h untuk rombel r TIDAK BOLEH lebih dari max_mapel_per_hari (5)
+                    model.Add(sum(mapel_present_vars) <= max_mapel_per_hari)
 
         # Constraint 5: Mapel Pancasila / M08 Diutamakan Jam 1-4
         if strict_m08:
@@ -385,9 +403,9 @@ class Scheduler:
 
     def solve_with_fallback(self, timeout_total=180, progress_callback=None):
         if progress_callback:
-            progress_callback("Menjalankan Solver...")
+            progress_callback("Menjalankan Solver (Maksimal 5 Mapel/Hari)...")
 
-        # Run 1: Strict Mode
+        # Run 1: Strict Mode (Maks 5 Mapel)
         t1 = max(30, int(timeout_total * 0.4))
         success, df_res, df_lap = self._solve_skenario(
             t1,
@@ -395,13 +413,14 @@ class Scheduler:
             strict_m08=True,
             allow_same_day_multisession=False,
             allow_split_3jp=False,
+            max_mapel_per_hari=5,
         )
         if success:
-            return True, df_res, df_lap, "Selesai (Solusi Baku)"
+            return True, df_res, df_lap, "Selesai (Solusi Baku - Maks 5 Mapel/Hari)"
 
-        # Run 2: Relaxation
+        # Run 2: Relaksasi MGMP
         if progress_callback:
-            progress_callback("Relaksasi MGMP...")
+            progress_callback("Relaksasi MGMP (Maksimal 5 Mapel/Hari)...")
         t2 = max(25, int(timeout_total * 0.3))
         success, df_res, df_lap = self._solve_skenario(
             t2,
@@ -409,9 +428,10 @@ class Scheduler:
             strict_m08=True,
             allow_same_day_multisession=False,
             allow_split_3jp=False,
+            max_mapel_per_hari=5,
         )
         if success:
-            return True, df_res, df_lap, "Selesai (Relaksasi MGMP)"
+            return True, df_res, df_lap, "Selesai (Relaksasi MGMP - Maks 5 Mapel/Hari)"
 
         # Run 3: Full Fallback
         if progress_callback:
@@ -423,9 +443,10 @@ class Scheduler:
             strict_m08=False,
             allow_same_day_multisession=True,
             allow_split_3jp=True,
+            max_mapel_per_hari=5,
         )
         if success:
-            return True, df_res, df_lap, "Selesai (Fleksibel)"
+            return True, df_res, df_lap, "Selesai (Fleksibel - Maks 5 Mapel/Hari)"
 
         return (
             False,
