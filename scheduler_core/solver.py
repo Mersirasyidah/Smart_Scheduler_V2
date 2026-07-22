@@ -179,6 +179,18 @@ class SchedulerSolver:
                         if jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
+            # -------------------------------------------------------------------
+            # PERBAIKAN HARD CONSTRAINT: KELAS 9 UNTUK MAPEL M09 & M10
+            # M09 & M10 Khusus Kelas 9 DILARANG KETAT di jam siang (Jam 7, 8, 9)
+            # -------------------------------------------------------------------
+            if rombel.startswith("9") and mapel in ["M09", "M10"]:
+                jam_pagi_diizinkan = {1, 2, 3, 4, 5, 6}
+                for hari in self.list_hari:
+                    for jam in self.jam_per_hari[hari]:
+                        if jam not in jam_pagi_diizinkan:
+                            # KUNCI HARD CONSTRAINT: Paksa variabel ke 0 (Sama sekali tidak boleh dipilih solver)
+                            self.model.Add(self.variables[(t_id, hari, jam)] == 0)
+
         # BATAS MAKSIMAL MENGAJAR GURU PER HARI (MAX 8 JP HARD, MAX 6 JP SOFT)
         for guru in self.list_guru:
             tugas_guru = [t for t in self.tugas_mengajar if t["guru"] == guru]
@@ -196,19 +208,6 @@ class SchedulerSolver:
                     over_6_var = self.model.NewIntVar(0, 2, f"over6_{guru}_{hari}")
                     self.model.Add(over_6_var >= total_jam_guru_hari - 6)
                     self.penalties.append(over_6_var * 20000)
-
-        # SOFT CONSTRAINTS: KELAS 9 UNTUK MAPEL M09 & M10
-        jam_diutamakan_kelas9 = {1, 2, 3, 4, 6}
-        for t in self.tugas_mengajar:
-            t_id = t["id_tugas"]
-            mapel = t["mapel"]
-            rombel = t["rombel"]
-
-            if rombel.startswith("9") and mapel in ["M09", "M10"]:
-                for hari in self.list_hari:
-                    for jam in self.jam_per_hari[hari]:
-                        if jam not in jam_diutamakan_kelas9:
-                            self.penalties.append(self.variables[(t_id, hari, jam)] * 10000)
 
         # ATURAN MGMP: GTT MUTLAK LIBUR, NON-GTT SOFT
         for t in self.tugas_mengajar:
@@ -321,7 +320,7 @@ class SchedulerSolver:
         return df_hasil
 
     def generate_teacher_report(self, df_hasil):
-        """Mengekstrak Laporan Harian Guru (Libur, Mengajar, Sela Jam Kosong)"""
+        """Menghasilkan Laporan Detail Guru (Hari, Libur, Kelas, Jam Ke, Jam Kosong Sela)"""
         if df_hasil.empty:
             return pd.DataFrame()
 
