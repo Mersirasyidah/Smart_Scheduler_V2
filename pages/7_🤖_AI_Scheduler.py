@@ -1,14 +1,32 @@
 import streamlit as st
 import pandas as pd
+import sqlite3
+import os
 from scheduler_engine import Scheduler
 
 st.set_page_config(page_title="AI Scheduler Engine", layout="wide")
 st.title("🤖 AI Scheduler Engine")
 
-# --- AUTO-LOAD DATA DARI FILE JIKA SESSION STATE KOSONG ---
-def load_default_data():
+def auto_load_data():
+    """Fungsi otomatis untuk mengambil data dari Database SQLite atau Folder Data"""
+    # 1. Coba Ambil dari Database SQLite (jika aplikasi Anda pakai DB)
+    db_paths = ["database.db", "data/database.db", "smart_scheduler.db"]
+    for db_path in db_paths:
+        if os.path.exists(db_path):
+            try:
+                conn = sqlite3.connect(db_path)
+                st.session_state["guru_df"] = pd.read_sql_query("SELECT * FROM guru", conn)
+                st.session_state["rombel_df"] = pd.read_sql_query("SELECT * FROM rombel", conn)
+                st.session_state["mengajar_df"] = pd.read_sql_query("SELECT * FROM mengajar", conn)
+                st.session_state["mapel_df"] = pd.read_sql_query("SELECT * FROM mapel", conn)
+                st.session_state["slot_df"] = pd.read_sql_query("SELECT * FROM slot", conn)
+                conn.close()
+                return True
+            except Exception:
+                pass
+
+    # 2. Coba Ambil dari File CSV di folder data/
     try:
-        # Sesuaikan nama file/path sesuai dengan file data Anda
         st.session_state["guru_df"] = pd.read_csv("data/guru.csv")
         st.session_state["rombel_df"] = pd.read_csv("data/rombel.csv")
         st.session_state["mengajar_df"] = pd.read_csv("data/mengajar.csv")
@@ -16,30 +34,35 @@ def load_default_data():
         st.session_state["slot_df"] = pd.read_csv("data/slot.csv")
         return True
     except Exception:
-        # Jika pakai Excel dalam satu file
-        try:
-            excel_file = "data/Data_Master.xlsx"
-            st.session_state["guru_df"] = pd.read_excel(excel_file, sheet_name="Guru")
-            st.session_state["rombel_df"] = pd.read_excel(excel_file, sheet_name="Rombel")
-            st.session_state["mengajar_df"] = pd.read_excel(excel_file, sheet_name="Mengajar")
-            st.session_state["mapel_df"] = pd.read_excel(excel_file, sheet_name="Mapel")
-            st.session_state["slot_df"] = pd.read_excel(excel_file, sheet_name="Slot")
-            return True
-        except Exception:
-            return False
+        pass
 
-# Cek apakah session state ada, jika tidak coba load otomatis
+    # 3. Coba Ambil dari database.py jika ada fungsi khusus getter
+    try:
+        import database as db
+        st.session_state["guru_df"] = db.get_guru()
+        st.session_state["rombel_df"] = db.get_rombel()
+        st.session_state["mengajar_df"] = db.get_mengajar()
+        st.session_state["mapel_df"] = db.get_mapel()
+        st.session_state["slot_df"] = db.get_slot()
+        return True
+    except Exception:
+        pass
+
+    return False
+
+# Jalankan auto-load jika session_state belum berisi data
 if "guru_df" not in st.session_state or st.session_state["guru_df"] is None:
-    load_default_data()
+    auto_load_data()
 
-# --- PENGECEKAN UTAMA ---
-if "guru_df" in st.session_state and st.session_state["guru_df"] is not None:
+# --- CEK KETERSEDIAAN DATA ---
+if "guru_df" in st.session_state and st.session_state["guru_df"] is not None and not st.session_state["guru_df"].empty:
     guru_df = st.session_state["guru_df"]
     rombel_df = st.session_state["rombel_df"]
     mengajar_df = st.session_state["mengajar_df"]
     mapel_df = st.session_state["mapel_df"]
     slot_df = st.session_state["slot_df"]
 
+    st.success("✅ Data Master Berhasil Dimuat!")
     timeout_seconds = st.slider("Timeout Optimization (detik)", 30, 300, 120)
 
     if st.button("🚀 Generate Jadwal & Laporan Guru"):
@@ -91,6 +114,7 @@ if "guru_df" in st.session_state and st.session_state["guru_df"] is not None:
                     mime="text/csv"
                 )
         else:
-            st.error("❌ Solver tidak dapat menemukan kombinasi jadwal. Silakan naikkan durasi Timeout.")
+            st.error("❌ Solver gagal menemukan kombinasi jadwal. Coba naikkan durasi Timeout.")
 else:
-    st.warning("⚠️ Data Master belum dimuat. Silakan muat data master terlebih dahulu melalui halaman Data Input/Upload.")
+    st.warning("⚠️ Data Master belum dimuat ke memori.")
+    st.info("📌 **Cara Mengatasi:** Buka menu **Data Input / Upload / Database** di sidebar terlebih dahulu untuk memuat data master, lalu kembali ke halaman ini.")
