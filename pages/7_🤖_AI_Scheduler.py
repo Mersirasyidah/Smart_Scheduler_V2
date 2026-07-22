@@ -23,7 +23,7 @@ timeout_seconds = st.sidebar.number_input(
     help="Semakin lama waktu pencarian, semakin tinggi peluang solver menemukan kombinasi yang optimal.",
 )
 
-# Section Upload File
+# 1. Section Upload File
 st.subheader("1. Unggah File Master Excel")
 uploaded_file = st.file_uploader(
     "Pilih file Excel jadwal (harus memiliki sheet: Guru, Rombel, Mengajar, Mapel, Slot)",
@@ -55,12 +55,30 @@ if uploaded_file:
 
             st.success("✅ Seluruh sheet master berhasil dibaca!")
 
+            # Hitung Slot Pembelajaran Spesifik (Bukan Total Baris)
+            col_jenis = next(
+                (c for c in slot_df.columns if str(c).strip().lower() == "jenis"),
+                None,
+            )
+            if col_jenis:
+                slot_pembelajaran_count = len(
+                    slot_df[
+                        slot_df[col_jenis]
+                        .astype(str)
+                        .str.strip()
+                        .str.upper()
+                        == "PEMBELAJARAN"
+                    ]
+                )
+            else:
+                slot_pembelajaran_count = len(slot_df)
+
             # Preview Ringkasan Data
             col1, col2, col3, col4 = st.columns(4)
             col1.metric("Total Guru", len(guru_df))
             col2.metric("Total Rombel", len(rombel_df))
             col3.metric("Total Tugas Mengajar", len(mengajar_df))
-            col4.metric("Total Slot Waktu", len(slot_df))
+            col4.metric("Total Slot Pembelajaran", slot_pembelajaran_count)
 
             st.markdown("---")
             st.subheader("2. Eksekusi AI Solver")
@@ -95,35 +113,69 @@ if uploaded_file:
                     st.markdown("---")
                     st.subheader("📊 Hasil Penjadwalan")
 
-                    tab1, tab2, tab3 = st.tabs(
+                    tab1, tab2, tab3, tab4 = st.tabs(
                         [
-                            "📅 Matriks Jadwal",
+                            "📅 Matriks Per Kelas",
+                            "📝 Detail Tabel",
                             "👨‍🏫 Laporan Guru",
                             "📥 Download Excel",
                         ]
                     )
 
+                    # --- TAB 1: MATRIKS PER KELAS ---
                     with tab1:
-                        st.markdown("##### Tabel Hasil Plotting Jam Belajar")
+                        st.markdown(
+                            "##### 📅 Jadwal Pelajaran Matriks Per Kelas / Rombel"
+                        )
+                        if not df_hasil.empty:
+                            df_display = df_hasil.copy()
+                            df_display["Mapel_Guru"] = (
+                                df_display["ID_Mapel"].astype(str)
+                                + " ("
+                                + df_display["ID_Guru"].astype(str)
+                                + ")"
+                            )
+
+                            # Membuat Pivot Table (Baris: Hari & Jam_Ke, Kolom: ID_Rombel)
+                            pivot_jadwal = df_display.pivot_table(
+                                index=["Hari", "Jam_Ke"],
+                                columns="ID_Rombel",
+                                values="Mapel_Guru",
+                                aggfunc="first",
+                            ).fillna("-")
+
+                            st.dataframe(pivot_jadwal, use_container_width=True)
+                        else:
+                            st.warning("Data hasil jadwal kosong.")
+
+                    # --- TAB 2: DETAIL TABEL RAW ---
+                    with tab2:
+                        st.markdown("##### Tabel Raw Plotting Jam Belajar")
                         st.dataframe(df_hasil, use_container_width=True)
 
-                    with tab2:
-                        st.markdown(
-                            "##### Laporan Distribusi Mengajar Per Guru"
-                        )
+                    # --- TAB 3: LAPORAN BEBAN GURU ---
+                    with tab3:
+                        st.markdown("##### Laporan Distribusi Mengajar Per Guru")
                         st.dataframe(df_laporan_guru, use_container_width=True)
 
-                    with tab3:
+                    # --- TAB 4: DOWNLOAD EXCEL ---
+                    with tab4:
                         st.markdown("##### Unduh Data Hasil Penjadwalan")
 
-                        # Konversi Hasil ke Excel Stream
                         output = io.BytesIO()
-                        with pd.ExcelWriter(
-                            output, engine="openpyxl"
-                        ) as writer:
+                        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                            # Sheet 1: Matriks per Kelas
+                            if not df_hasil.empty:
+                                pivot_jadwal.to_excel(
+                                    writer, sheet_name="Matriks_Jadwal_Kelas"
+                                )
+
+                            # Sheet 2: Detail Raw Data
                             df_hasil.to_excel(
                                 writer, sheet_name="Jadwal_Master", index=False
                             )
+
+                            # Sheet 3: Laporan Guru
                             df_laporan_guru.to_excel(
                                 writer, sheet_name="Laporan_Guru", index=False
                             )
@@ -131,7 +183,7 @@ if uploaded_file:
                         excel_data = output.getvalue()
 
                         st.download_button(
-                            label="📥 Download File Excel Hasil Jadwal",
+                            label="📥 Download File Excel Hasil Jadwal (.xlsx)",
                             data=excel_data,
                             file_name="Hasil_Penjadwalan_AI.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
