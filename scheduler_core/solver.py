@@ -61,13 +61,11 @@ class SchedulerSolver:
             mapel_nama = str(row["Mapel"]).strip().upper()
             mapel_id = mapel_mapping.get(mapel_nama, str(row.get("ID_Mapel", "M99")).strip())
 
-            # =========================================================
-            # ATURAN KHUSUS (OVERRIDE) PEMBAGIAN JP M09 DAN M06
-            # =========================================================
+            # OVERRIDE PEMBAGIAN JP SANGAT KETAT (M09 -> 2,2,1 | M06 -> 2,2,2)
             if mapel_id == "M09":
-                list_jp = [2, 2, 1]  # Memaksa pembagian 2,2,1
+                list_jp = [2, 2, 1]
             elif mapel_id == "M06":
-                list_jp = [2, 2, 2]  # Memaksa pembagian 2,2,2
+                list_jp = [2, 2, 2]
             else:
                 pembagian_str = str(row.get("Pembagian", "")).strip()
                 if "," in pembagian_str:
@@ -80,7 +78,6 @@ class SchedulerSolver:
                     except Exception:
                         list_jp = [int(row["JP"])]
 
-            # Daftarkan setiap blok JP sebagai unit tugas mandiri
             for jp_blok in list_jp:
                 if jp_blok > 0:
                     self.tugas_mengajar.append({
@@ -145,9 +142,7 @@ class SchedulerSolver:
 
         kamis_key = next((h for h in self.list_hari if h.strip().lower() == "kamis"), None)
 
-        # =============================================================
-        # BLOK KETERSEDIAAN DARI JADWAL KELAS 7 & 8
-        # =============================================================
+        # 2. Pre-Occupied Slots dari Jadwal Kelas 7 & 8
         guru_sibuk_existing = set()
         if not self.df_existing.empty:
             jam_col = "Jam_Ke" if "Jam_Ke" in self.df_existing.columns else "Jam"
@@ -162,9 +157,7 @@ class SchedulerSolver:
                     g = str(row[guru_col]).strip()
                     guru_sibuk_existing.add((g, h, j))
 
-        # =============================================================
-        # HARD CONSTRAINTS (KELAS 9)
-        # =============================================================
+        # 3. HARD CONSTRAINTS
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
@@ -172,20 +165,20 @@ class SchedulerSolver:
             guru = t["guru"]
             jp = t["jp"]
 
-            # Total jam per blok harus sesuai JP (misal: 2 JP -> 2 jam berurutan)
+            # Total JP per blok harus tepat
             self.model.Add(
                 sum(self.variables[(t_id, hari, jam)] for hari in self.list_hari for jam in self.jam_per_hari[hari]) == jp
             )
-            # Setiap blok tugas hanya boleh ditaruh di 1 hari
+            # Setiap blok hanya di 1 hari
             self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
 
-            # Cek Bentrok dengan Kelas 7/8
+            # Mencegah Bentrok dengan Kelas 7/8
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     if (guru, hari, jam) in guru_sibuk_existing:
                         self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
-            # Khusus M01 di Kelas 9A hari Kamis
+            # Aturan Khusus M01 9A Hari Kamis
             if mapel == "M01" and rombel == "9A" and kamis_key:
                 target_jam = [7, 8, 9]
                 if all(j in self.jam_per_hari[kamis_key] for j in target_jam):
@@ -196,27 +189,25 @@ class SchedulerSolver:
                         else:
                             self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
 
-            # ---------------------------------------------------------
-            # KHUSUS M09 (WAJIB DI JAM 1-2)
-            # ---------------------------------------------------------
-            if mapel == "M09":
-                for hari in self.list_hari:
-                    for jam in self.jam_per_hari[hari]:
-                        if jam > 2:
-                            self.model.Add(self.variables[(t_id, hari, jam)] == 0)
-
-            # ---------------------------------------------------------
-            # KHUSUS M10 & M11 (PJOK) -> MAKSIMAL JAM KE-6
-            # ---------------------------------------------------------
-            elif mapel == "M10" or mapel in self.mapel_pjok:
+            # M10 & PJOK (M11) Batas Maksimal Jam ke-6
+            if mapel == "M10" or mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
-        # -------------------------------------------------------------
-        # ATURAN MGMP
-        # -------------------------------------------------------------
+        # 4. SOFT CONSTRAINT PRIORITAS M09 (Diberikan penalti sangat tinggi jika keluar Jam 1-2)
+        for t in self.tugas_mengajar:
+            t_id = t["id_tugas"]
+            mapel = t["mapel"]
+            if mapel == "M09":
+                for hari in self.list_hari:
+                    for jam in self.jam_per_hari[hari]:
+                        if jam > 2:
+                            # Penalti 100.000 poin per jam jika di luar Jam 1-2
+                            self.penalties.append(self.variables[(t_id, hari, jam)] * 100000)
+
+        # 5. Aturan MGMP
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             guru = t["guru"]
@@ -249,23 +240,20 @@ class SchedulerSolver:
                 if mapel_aktif_hari:
                     self.model.Add(sum(mapel_aktif_hari) <= 5)
 
-        # Bentrok Internal Rombel Kelas 9
+        # Bentrok Internal Rombel & Guru
         for rombel in rombel_k9:
             tugas_rombel = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_rombel) <= 1)
 
-        # Bentrok Guru Antar Sesama Kelas 9
         for guru in self.list_guru:
             tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_guru) <= 1)
 
-        # -------------------------------------------------------------
-        # BLOK JAM BERURUTAN MANDATORI (SLIDING WINDOW)
-        # -------------------------------------------------------------
+        # Jam Berurutan Mandatori (Sliding Window)
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             target_jp = t["jp"]
@@ -285,16 +273,6 @@ class SchedulerSolver:
                     else:
                         self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
-        # Soft Constraint Tambahan
-        for t in self.tugas_mengajar:
-            t_id = t["id_tugas"]
-            mapel = t["mapel"]
-            if mapel == "M10" or mapel in self.mapel_pjok:
-                for hari in self.list_hari:
-                    for jam in self.jam_per_hari[hari]:
-                        if jam in [4, 5, 6]:
-                            self.penalties.append(self.variables[(t_id, hari, jam)] * 10)
-
         if self.penalties:
             self.model.Minimize(sum(self.penalties))
 
@@ -307,16 +285,13 @@ class SchedulerSolver:
         return status in [cp_model.OPTIMAL, cp_model.FEASIBLE]
 
     def extract_results(self):
-        """
-        Mengembalikan jadwal gabungan Kelas 7, 8, dan 9.
-        """
         if self.solver is None:
             return self.df_existing
 
         rows = []
         tugas_lookup = {t["id_tugas"]: t for t in self.tugas_mengajar}
 
-        # 1. Ekstraksi Hasil Penjadwalan Baru (Kelas 9)
+        # Ekstraksi Kelas 9
         for (t_id, hari, jam), var in self.variables.items():
             if self.solver.Value(var) == 1:
                 t = tugas_lookup[t_id]
@@ -330,14 +305,13 @@ class SchedulerSolver:
 
         df_k9 = pd.DataFrame(rows)
 
-        # 2. Penggabungan dengan Jadwal Kelas 7 & 8
+        # Gabungkan dengan Kelas 7 & 8
         if not self.df_existing.empty:
             df_k78 = self.df_existing[~self.df_existing["ID_Rombel"].astype(str).str.startswith("9")].copy()
             df_gabungan = pd.concat([df_k78, df_k9], ignore_index=True)
         else:
             df_gabungan = df_k9
 
-        # 3. Urutkan Tampilan (Kelas 7 s/d 9)
         if not df_gabungan.empty:
             df_gabungan = df_gabungan.sort_values(by=["Hari", "ID_Rombel", "Jam_Ke"]).reset_index(drop=True)
             
