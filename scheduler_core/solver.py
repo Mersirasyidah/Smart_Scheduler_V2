@@ -77,14 +77,13 @@ class SchedulerSolver:
         self.mapel_pjok = set()
         for _, row in self.mapel.iterrows():
             kode = str(row["ID_Mapel"]).strip().upper()
-            if kode == "M11" or "JASMANI" in str(row["Nama_Mapel"]).upper():
+            if kode == "M11" or "JASMANI" in str(row["Nama_Mapel"].strip()).upper():
                 self.mapel_pjok.add(str(row["ID_Mapel"]).strip())
 
-        # 3. Deteksi Status GTT & Hari MGMP (dari Sheet Guru & Mapel)
+        # 3. Deteksi Status GTT & Hari MGMP
         self.guru_gtt_set = set()
         self.guru_mgmp_dict = {}
 
-        # Pembacaan dari Sheet Guru
         for _, row in self.guru.iterrows():
             g_id = str(row["ID_Guru"]).strip()
             
@@ -99,7 +98,6 @@ class SchedulerSolver:
             if "Hari_MGMP" in row and pd.notna(row["Hari_MGMP"]):
                 self.guru_mgmp_dict[g_id] = str(row["Hari_MGMP"]).strip()
 
-        # Pembacaan dari Sheet Mapel
         self.mapel_mgmp_dict = {}
         if "Hari_MGMP" in self.mapel.columns:
             for _, row in self.mapel.iterrows():
@@ -128,16 +126,16 @@ class SchedulerSolver:
                     [self.variables[(t_id, hari, jam)] for jam in self.jam_per_hari[hari]]
                 )
 
-        # Cari Kunci Hari Kamis
         kamis_key = next((h for h in self.list_hari if h.strip().lower() == "kamis"), None)
 
-        # Pemetaan Slot Jam Eksplisit Mapel M01 (Agama) di Hari Kamis
         m01_slot_mapping = {
             "7A": [1, 2, 3],
             "8A": [4, 5, 6],
             "8C": [4, 5, 6],
             "9A": [7, 8, 9]
         }
+
+        target_mapel_m09_m10 = {"M09", "M10"}
 
         # =============================================================
         # HARD CONSTRAINTS
@@ -146,10 +144,11 @@ class SchedulerSolver:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
             rombel = t["rombel"]
+            jp = t["jp"]
 
             # Total jam mengajar harus sama dengan JP
             self.model.Add(
-                sum(self.variables[(t_id, hari, jam)] for hari in self.list_hari for jam in self.jam_per_hari[hari]) == t["jp"]
+                sum(self.variables[(t_id, hari, jam)] for hari in self.list_hari for jam in self.jam_per_hari[hari]) == jp
             )
             # Setiap blok tugas hanya aktif di 1 hari
             self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
@@ -159,16 +158,26 @@ class SchedulerSolver:
             # ---------------------------------------------------------
             if mapel == "M01" and rombel in m01_slot_mapping:
                 if kamis_key:
-                    # Kunci Hari ke Kamis
                     self.model.Add(tugas_hari_aktif[(t_id, kamis_key)] == 1)
-                    
-                    # Kunci Jam Sesuai Rombel (7A -> 1,2,3 | 8A & 8C -> 4,5,6 | 9A -> 7,8,9)
                     target_jam = m01_slot_mapping[rombel]
                     for jam in self.jam_per_hari[kamis_key]:
                         if jam in target_jam:
                             self.model.Add(self.variables[(t_id, kamis_key, jam)] == 1)
                         else:
                             self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
+
+            # ---------------------------------------------------------
+            # VALIDASI KHUSUS MAPEL M09 & M10 UNTUK SEMUA KELAS (7, 8, 9)
+            # - Blok > 1 JP: Jam ke 1-4 saja (TIDAK BOLEH > Jam 4)
+            # - Blok 1 JP  : Boleh di atas jam ke-4, tapi TIDAK BOLEH > Jam 6
+            # ---------------------------------------------------------
+            if mapel in target_mapel_m09_m10:
+                for hari in self.list_hari:
+                    for jam in self.jam_per_hari[hari]:
+                        if jp > 1 and jam > 4:
+                            self.model.Add(self.variables[(t_id, hari, jam)] == 0)
+                        elif jp == 1 and jam > 6:
+                            self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
             # PJOK Jam Maksimal Jam ke-6
             if mapel in self.mapel_pjok:
@@ -191,11 +200,8 @@ class SchedulerSolver:
                 hari_mgmp_match = next((h for h in self.list_hari if h.strip().lower() == hari_mgmp_str.lower()), None)
 
                 if hari_mgmp_match:
-                    # 1. GTT: MUTLAK LIBUR DI HARI MGMP
                     if guru in self.guru_gtt_set:
                         self.model.Add(tugas_hari_aktif[(t_id, hari_mgmp_match)] == 0)
-                    
-                    # 2. NON-GTT: DIUTAMAKAN HINGGA max_jam_mgmp_nongtt
                     else:
                         for jam in self.jam_per_hari[hari_mgmp_match]:
                             if jam > max_jam_mgmp_nongtt:
