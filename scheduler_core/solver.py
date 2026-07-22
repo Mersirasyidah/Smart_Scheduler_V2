@@ -83,7 +83,7 @@ class SchedulerSolver:
                     })
                     tugas_id += 1
 
-        # Identifikasi Mapel PJOK & Target Mapel S/D Jam Ke-6
+        # Identifikasi Mapel PJOK
         self.mapel_pjok = set()
         for _, row in self.mapel.iterrows():
             kode = str(row["ID_Mapel"]).strip().upper()
@@ -135,8 +135,6 @@ class SchedulerSolver:
                 )
 
         kamis_key = next((h for h in self.list_hari if h.strip().lower() == "kamis"), None)
-        # Daftar mapel yang dibatasi maksimal sampai jam ke-6
-        target_mapel_max_jam6 = {"M09", "M10"}.union(self.mapel_pjok)
 
         # =============================================================
         # BLOK KETERSEDIAAN DARI JADWAL KELAS 7 & 8 (PRE-OCCUPIED SLOTS)
@@ -195,13 +193,20 @@ class SchedulerSolver:
                             self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
 
             # ---------------------------------------------------------
-            # ATURAN M09, M10, DAN M11 (PJOK) -> MAKSIMAL JAM KE-6
+            # ATURAN SPESIFIK M09, M10, DAN M11 (PJOK)
             # ---------------------------------------------------------
-            if mapel in target_mapel_max_jam6:
+            # 1. KHUSUS M09: Dilarang keras di luar Jam 1 dan Jam 2
+            if mapel == "M09":
+                for hari in self.list_hari:
+                    for jam in self.jam_per_hari[hari]:
+                        if jam > 2:
+                            self.model.Add(self.variables[(t_id, hari, jam)] == 0)
+
+            # 2. KHUSUS M10 DAN M11 (PJOK): Maksimal Jam ke-6 (Jam 1 s/d 6 diperbolehkan)
+            elif mapel == "M10" or mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam > 6:
-                            # Dilarang keras masuk di jam ke-7, 8, 9
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
         # -------------------------------------------------------------
@@ -246,7 +251,7 @@ class SchedulerSolver:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_rombel) <= 1)
 
-        # Bentrok Guru Antar Sesama Kelas 9 (SUDAH DIPERBAIKI)
+        # Bentrok Guru Antar Sesama Kelas 9
         for guru in self.list_guru:
             tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
@@ -273,15 +278,14 @@ class SchedulerSolver:
                     else:
                         self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
-        # Soft Constraints: Prioritaskan jam yang lebih pagi (Jam 1-3) jika memungkinkan
+        # Soft Constraints: Berikan insentif/prioritas agar M10 dan PJOK berada lebih pagi jika memungkinkan
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
-            if mapel in target_mapel_max_jam6:
+            if mapel == "M10" or mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam in [4, 5, 6]:
-                            # Beri penalti kecil agar solver tetap berusaha menaruh di jam 1-3 dulu
                             self.penalties.append(self.variables[(t_id, hari, jam)] * 10)
 
         if self.penalties:
