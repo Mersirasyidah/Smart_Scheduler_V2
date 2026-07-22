@@ -107,7 +107,7 @@ class SchedulerSolver:
         self.variables = {}
         self.penalties = []
 
-    def run_solver(self, timeout_seconds=120, max_jam_mgmp_nongtt=3):
+    def run_solver(self, timeout_seconds=180, max_jam_mgmp_nongtt=3):
         # Inisialisasi Variabel Utama
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
@@ -125,13 +125,12 @@ class SchedulerSolver:
                     [self.variables[(t_id, hari, jam)] for jam in self.jam_per_hari[hari]]
                 )
 
-        # =============================================================
-        # HARD & SOFT CONSTRAINTS REVISI
-        # =============================================================
-        
-        # 1. Aturan Dasar Tugas Mengajar & Spesifik M01 (Agama)
+        # Cari Key Hari Kamis
         kamis_key = next((h for h in self.list_hari if h.strip().lower() == "kamis"), None)
-        
+
+        # =============================================================
+        # ATURAN & BATASAN (HARD & SOFT CONSTRAINTS)
+        # =============================================================
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
@@ -144,8 +143,14 @@ class SchedulerSolver:
             # Setiap blok tugas hanya aktif di 1 hari
             self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
 
-            # VALIDASI 1: M01 Spesifik Hari Kamis & Jam Tertentu
+            # ---------------------------------------------------------
+            # VALIDASI 1: M01 (Agama) Hari Kamis & Jam Target
+            # ---------------------------------------------------------
             if mapel == "M01" and kamis_key:
+                # Wajib Kamis (Hard Constraint)
+                if rombel in ["7A", "8A", "8C", "9A"]:
+                    self.model.Add(tugas_hari_aktif[(t_id, kamis_key)] == 1)
+
                 jam_target = []
                 if rombel == "7A":
                     jam_target = [1, 2, 3]
@@ -154,59 +159,56 @@ class SchedulerSolver:
                 elif rombel == "9A":
                     jam_target = [7, 8, 9]
 
-                if jam_target:
-                    # Kunci tugas aktif di hari Kamis
-                    self.model.Add(tugas_hari_aktif[(t_id, kamis_key)] == 1)
-                    # Kunci jam-jam spesifiknya
-                    for j in jam_target:
-                        if j in self.jam_per_hari[kamis_key]:
-                            self.model.Add(self.variables[(t_id, kamis_key, j)] == 1)
+                # Beri penalti sangat tinggi jika keluar dari jam target
+                for jam in self.jam_per_hari[kamis_key]:
+                    if jam_target and jam not in jam_target:
+                        self.penalties.append(self.variables[(t_id, kamis_key, jam)] * 100000)
 
-            # VALIDASI 2: M09 dan M10 Diusahakan Jam 1-4 untuk Kelas 9 (Soft Constraint)
+            # ---------------------------------------------------------
+            # VALIDASI 2: M09 & M10 Diusahakan Jam 1-4 untuk Kelas 9
+            # ---------------------------------------------------------
             if mapel in ["M09", "M10"] and rombel.startswith("9"):
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam > 4:
                             self.penalties.append(self.variables[(t_id, hari, jam)] * 1000)
 
-            # PJOK Jam Maksimal Jam ke-6
+            # ---------------------------------------------------------
+            # VALIDASI 5: PJOK (M11) Jam 1-3 vs Kelas 9
+            # ---------------------------------------------------------
             if mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam > 6:
+                            # Tidak boleh sama sekali di atas jam 6
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
+                        elif jam > 3:
+                            # Kelas 9 penalti kecil agar bisa mengalah di jam 4-6
+                            bobot = 300 if rombel.startswith("9") else 2500
+                            self.penalties.append(self.variables[(t_id, hari, jam)] * bobot)
 
+        # -------------------------------------------------------------
         # VALIDASI 3: Maksimal 6 JP per Guru per Hari
+        # -------------------------------------------------------------
         for guru in self.list_guru:
             tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
-                # Total jam mengajar guru dalam 1 hari <= 6
                 self.model.Add(
                     sum(self.variables[(t_id, hari, jam)] for t_id in tugas_guru for jam in self.jam_per_hari[hari]) <= 6
                 )
 
-        # VALIDASI 4: Guru G32 Diutamakan Mengajar Hanya di Hari Kamis
+        # -------------------------------------------------------------
+        # VALIDASI 4: Guru G32 Difokuskan Mengajar di Hari Kamis
+        # -------------------------------------------------------------
         if "G32" in self.list_guru and kamis_key:
             tugas_g32 = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == "G32"]
             for hari in self.list_hari:
                 if hari != kamis_key:
                     for t_id in tugas_g32:
-                        self.penalties.append(tugas_hari_aktif[(t_id, hari)] * 10000)
-
-        # VALIDASI 5: PJOK (M11) Jam 1-3 vs Kelas 9 Fleksibel Jam 4-6
-        for t in self.tugas_mengajar:
-            if t["mapel"] in self.mapel_pjok:
-                t_id = t["id_tugas"]
-                rombel = t["rombel"]
-                for hari in self.list_hari:
-                    for jam in self.jam_per_hari[hari]:
-                        if jam > 3:
-                            # Kelas 9 penaltinya lebih kecil agar mau "mengalah" di jam 4-6
-                            bobot_penalti = 300 if rombel.startswith("9") else 2000
-                            self.penalties.append(self.variables[(t_id, hari, jam)] * bobot_penalti)
+                        self.penalties.append(tugas_hari_aktif[(t_id, hari)] * 50000)
 
         # -------------------------------------------------------------
-        # ATURAN MGMP (GTT FREE / NON-GTT MAX JAM 3)
+        # ATURAN MGMP (GTT MUTLAK LIBUR / NON-GTT MAX JAM 3)
         # -------------------------------------------------------------
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
@@ -226,7 +228,7 @@ class SchedulerSolver:
                             if jam > max_jam_mgmp_nongtt:
                                 self.penalties.append(self.variables[(t_id, hari_mgmp_match, jam)] * 5000)
 
-        # Bentrok & Aturan Rombel / Guru
+        # Bentrok Rombel & Mapel per Hari
         for rombel in self.list_rombel:
             for hari in self.list_hari:
                 mapel_aktif_hari = []
@@ -247,12 +249,14 @@ class SchedulerSolver:
                     for hari in self.list_hari:
                         self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for t_id in tugas_sama) <= 1)
 
+        # Mencegah Bentrok Rombel
         for rombel in self.list_rombel:
             tugas_rombel = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_rombel) <= 1)
 
+        # Mencegah Bentrok Guru
         for guru in self.list_guru:
             tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
@@ -315,24 +319,18 @@ class SchedulerSolver:
             
         return df_hasil
 
-    # =============================================================
-    # FITUR LAPORAN GURU (PERTANYAAN NO. 6)
-    # =============================================================
     def generate_laporan_guru(self):
-        """Menghasilkan DataFrame ringkasan jadwal mengajar per guru."""
+        """Menghasilkan laporan analisis mengajar per guru."""
         df_hasil = self.extract_results()
         if df_hasil.empty:
-            print("Belum ada hasil jadwal untuk dibuatkan laporan.")
             return pd.DataFrame()
 
-        # Grouping berdasarkan Guru, Hari, dan Rombel
         laporan_list = []
         
         for guru_id, group_guru in df_hasil.groupby("ID_Guru"):
             total_jp = len(group_guru)
             hari_list = group_guru["Hari"].unique().tolist()
             
-            # Format ringkasan mengajar: misal "Senin (7A, 8B), Selasa (9C)"
             ringkasan_hari = []
             for hari in self.list_hari:
                 if hari in hari_list:
