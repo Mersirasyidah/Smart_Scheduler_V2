@@ -11,7 +11,7 @@ class Scheduler:
         self.mapel_df = mapel_df.copy()
         self.slot_df = slot_df.copy()
 
-        # Membersihkan spasi pada nama kolom
+        # Pembersihan nama kolom
         for df in [
             self.guru_df,
             self.rombel_df,
@@ -31,28 +31,26 @@ class Scheduler:
                     return col
         return df.columns[0]
 
-    def _parse_blok(self, val_blok, total_jp, mapel_code):
+    def _parse_blok(self, val_blok, total_jp, mapel_code, force_flexible_3jp=False):
         """
-        Aturan Blok Jam:
-        1. Jika mapel_code == 'M05' dan total_jp == 3: Wajib dipecah [2, 1]
-        2. Jika total_jp == 3 (selain M05): Wajib utuh [3]
-        3. Untuk total_jp lainnya, baca kolom Blok pada Excel. Jika kosong, gunakan pecahan ideal.
+        Aturan Pembagian Blok Jam:
+        - Mapel M05 (3 JP) -> Selalu dipecah [2, 1]
+        - Mapel 3 JP Lainnya -> Prioritas [3] (Utuh 3 JP). Jika force_flexible_3jp=True, diizinkan [2, 1]
+        - Mapel lainnya -> Membaca pola blok dari sheet Mapel.
         """
         mapel_clean = str(mapel_code).strip().upper()
 
-        # Aturan Khusus M05 (3 JP -> dipecah 2, 1)
+        # Aturan Khusus M05
         if mapel_clean == "M05" and total_jp == 3:
             return [2, 1]
 
-        # Aturan Umum Mapel 3 JP -> Langsung 3 JP Utuh
-        if total_jp == 3 and (
-            pd.isna(val_blok) or not str(val_blok).strip() or mapel_clean != "M05"
-        ):
-            # Jika di excel tidak ditulis beda secara spesifik, default 3 JP utuh
-            if pd.isna(val_blok) or not str(val_blok).strip():
-                return [3]
+        # Aturan Mapel 3 JP Lainnya
+        if total_jp == 3:
+            if force_flexible_3jp:
+                return [2, 1]
+            return [3]
 
-        # Pembacaan Nilai Kolom 'Blok' dari Sheet Mapel jika diisi manual
+        # Pembacaan Nilai Kolom 'Blok'
         if pd.notna(val_blok) and str(val_blok).strip():
             s_val = str(val_blok).replace(";", ",").replace("-", ",")
             parts = [p.strip() for p in s_val.split(",") if p.strip()]
@@ -66,15 +64,11 @@ class Scheduler:
                 except ValueError:
                     pass
 
-            # Gunakan jika total penjumlahan blok di Excel persis sama dengan Beban JP
             if sum(durations) == total_jp and len(durations) > 0:
                 return durations
 
-        # Fallback Generator Otomatis jika kolom Blok kosong:
-        # Misal 5 JP -> [3, 2], 4 JP -> [2, 2], 2 JP -> [2]
-        if total_jp == 3:
-            return [3]
-        elif total_jp == 5:
+        # Default fallback untuk JP lain
+        if total_jp == 5:
             return [3, 2]
         elif total_jp == 4:
             return [2, 2]
@@ -88,11 +82,15 @@ class Scheduler:
             return res
 
     def _solve_skenario(
-        self, timeout_sec, strict_mgmp=True, allow_same_day_multisession=False
+        self,
+        timeout_sec,
+        strict_mgmp=True,
+        allow_same_day_multisession=False,
+        force_flexible_3jp=False,
     ):
         model = cp_model.CpModel()
 
-        # 1. Deteksi Kolom Fleksibel
+        # 1. Deteksi Kolom
         col_rombel_id = self._get_col(
             self.rombel_df,
             ["ID_Rombel", "ID Rombel", "Rombel", "Kelas", "Kelas / Rombel"],
@@ -124,7 +122,6 @@ class Scheduler:
             None,
         )
 
-        # Mapping Mapel ke Skema Blok
         blok_map = {}
         if col_mapel_blok:
             for _, r_m in self.mapel_df.iterrows():
@@ -139,7 +136,6 @@ class Scheduler:
             .tolist()
         )
 
-        # Filter Slot Pembelajaran
         col_jenis = next(
             (c for c in self.slot_df.columns if c.lower() == "jenis"), None
         )
@@ -167,7 +163,7 @@ class Scheduler:
             )
         slot_tuples = sorted(list(set(slot_tuples)))
 
-        # 2. Pecah Tugas Mengajar Menjadi Sesi Mengikuti Logika 3 JP & M05
+        # 2. Pemisahan Sesi Mengajar
         sessions = []
         for idx, row in self.mengajar_df.iterrows():
             rombel = str(row[col_mengajar_rombel]).strip()
@@ -176,7 +172,12 @@ class Scheduler:
             total_jp = int(row[col_mengajar_jp])
 
             raw_blok = blok_map.get(mapel, None)
-            durations = self._parse_blok(raw_blok, total_jp, mapel_code=mapel)
+            durations = self._parse_blok(
+                raw_blok,
+                total_jp,
+                mapel_code=mapel,
+                force_flexible_3jp=force_flexible_3jp,
+            )
 
             for s_idx, dur in enumerate(durations):
                 sessions.append(
@@ -191,8 +192,8 @@ class Scheduler:
                 )
 
         # 3. Decision Variables
-        S = {}  # Jam mulai sesi
-        X = {}  # Jam keterisian slot
+        S = {}
+        X = {}
 
         for s in sessions:
             s_id = s["session_id"]
@@ -205,7 +206,6 @@ class Scheduler:
                 for j in j_in_h:
                     S[(s_id, h, j)] = model.NewBoolVar(f"s_{s_id}_{h}_{j}")
 
-                    # Cek apakah durasi blok cukup dan berurutan
                     block_j = []
                     valid_block = True
                     for k in range(dur):
@@ -218,15 +218,12 @@ class Scheduler:
                     if not valid_block:
                         model.Add(S[(s_id, h, j)] == 0)
                     else:
-                        # Jika Sesi dimulai di (h, j), kunci jam j s.d. j+dur-1 secara kontinu
                         for bj in block_j:
                             model.Add(
                                 X[(s_id, h, bj)] == 1
                             ).OnlyEnforceIf(S[(s_id, h, j)])
 
-        # -------------------------------------------------------------
-        # CONSTRAINT 1: Setiap Sesi Harus Ditempatkan Tepat 1 Kali
-        # -------------------------------------------------------------
+        # CONSTRAINT 1: Setiap Sesi Ditempatkan Tepat 1 Kali
         for s in sessions:
             s_id = s["session_id"]
             model.Add(
@@ -238,17 +235,13 @@ class Scheduler:
                 == 1
             )
 
-        # -------------------------------------------------------------
-        # CONSTRAINT 2: Maksimal 1 Sesi Mengajar per Slot per Rombel
-        # -------------------------------------------------------------
+        # CONSTRAINT 2: Maksimal 1 Sesi per Slot per Rombel
         for r in rombel_list:
             s_ids_r = [s["session_id"] for s in sessions if s["rombel"] == r]
             for h, j in slot_tuples:
                 model.Add(sum(X[(s_id, h, j)] for s_id in s_ids_r) <= 1)
 
-        # -------------------------------------------------------------
-        # CONSTRAINT 3: Guru Tidak Boleh Mengajar Bentrok
-        # -------------------------------------------------------------
+        # CONSTRAINT 3: Guru Tidak Bentrok
         col_guru_id = self._get_col(
             self.guru_df, ["ID_Guru", "ID Guru", "Guru", "Nama Guru"]
         )
@@ -260,9 +253,7 @@ class Scheduler:
             for h, j in slot_tuples:
                 model.Add(sum(X[(s_id, h, j)] for s_id in s_ids_g) <= 1)
 
-        # -------------------------------------------------------------
-        # CONSTRAINT 4: Distribusi Sesi per Hari
-        # -------------------------------------------------------------
+        # CONSTRAINT 4: Distribusi Sesi Mapel per Hari
         for r in rombel_list:
             mapel_in_r = set(s["mapel"] for s in sessions if s["rombel"] == r)
             for m in mapel_in_r:
@@ -284,9 +275,7 @@ class Scheduler:
                             <= max_sess
                         )
 
-        # -------------------------------------------------------------
-        # CONSTRAINT 5: Aturan Mapel M08 (Hanya Boleh Jam Ke 1 s.d. 4)
-        # -------------------------------------------------------------
+        # CONSTRAINT 5: Mapel M08 Khusus Jam 1-4
         for s in sessions:
             if str(s["mapel"]).strip().upper() == "M08":
                 s_id = s["session_id"]
@@ -294,9 +283,7 @@ class Scheduler:
                     if j > 4:
                         model.Add(X[(s_id, h, j)] == 0)
 
-        # -------------------------------------------------------------
-        # CONSTRAINT 6: Hari MGMP Guru (Jam > 4 Kosong)
-        # -------------------------------------------------------------
+        # CONSTRAINT 6: MGMP Guru (Tidak mengajar di atas jam ke-4 pada hari MGMP)
         col_mgmp = self._get_col(
             self.guru_df, ["Hari_MGMP", "Hari MGMP", "MGMP"]
         )
@@ -318,7 +305,7 @@ class Scheduler:
                             for s_id in s_ids_g:
                                 model.Add(X[(s_id, h, j)] == 0)
 
-        # Jalankan Solver CP-SAT
+        # Eksekusi Solver
         solver = cp_model.CpSolver()
         solver.parameters.max_time_in_seconds = float(timeout_sec)
         solver.parameters.num_search_workers = 4
@@ -358,64 +345,46 @@ class Scheduler:
             return False, pd.DataFrame(), pd.DataFrame()
 
     def solve_with_fallback(self, timeout_total=180, progress_callback=None):
-        """Strategi bertahap solver."""
+        """Menjalankan solver secara bertahap."""
 
-        # Stage 1: Strict MGMP & 1 Sesi Mapel per Hari
+        # Tahap 1: Mempertahankan 3 JP Utuh & MGMP Strict (Hari Jumat 6 JP memudahkan tahap ini)
         if progress_callback:
-            progress_callback(
-                "Tahap 1: Memproses jadwal (3 JP Utuh & M05 dipecah 2,1)..."
-            )
-        t1 = max(20, int(timeout_total * 0.5))
+            progress_callback("Tahap 1: Memproses jadwal 3 JP utuh & MGMP Strict...")
+        t1 = max(30, int(timeout_total * 0.5))
         success, df_res, df_lap = self._solve_skenario(
             timeout_sec=t1,
             strict_mgmp=True,
             allow_same_day_multisession=False,
+            force_flexible_3jp=False,
         )
         if success:
-            return (
-                True,
-                df_res,
-                df_lap,
-                "Solusi Optimal (Presisi Sesuai Blok Mapel & MGMP)",
-            )
+            return True, df_res, df_lap, "Solusi Optimal (3 JP Utuh & MGMP Terpenuhi)"
 
-        # Stage 2: Relaksasi MGMP Guru
+        # Tahap 2: Menyesuaikan MGMP jika terbentur
         if progress_callback:
-            progress_callback(
-                "Tahap 2: Menyesuaikan aturan MGMP Guru yang padat..."
-            )
-        t2 = max(20, int(timeout_total * 0.3))
+            progress_callback("Tahap 2: Melonggarkan batasan MGMP...")
+        t2 = max(20, int(timeout_total * 0.25))
         success, df_res, df_lap = self._solve_skenario(
             timeout_sec=t2,
             strict_mgmp=False,
             allow_same_day_multisession=False,
+            force_flexible_3jp=False,
         )
         if success:
-            return (
-                True,
-                df_res,
-                df_lap,
-                "Solusi Relaksasi (Sesuai Blok Mapel, MGMP Disesuaikan)",
-            )
+            return True, df_res, df_lap, "Solusi Relaksasi MGMP (3 JP Utuh Terjaga)"
 
-        # Stage 3: Fleksibilitas Sesi Berbeda pada Hari Sama
+        # Tahap 3: Pemecahan fleksibel 3 JP
         if progress_callback:
-            progress_callback(
-                "Tahap 3: Mengoptimalkan fleksibilitas slot jam..."
-            )
-        t3 = max(20, int(timeout_total * 0.2))
+            progress_callback("Tahap 3: Mengoptimalkan pecahan 3 JP...")
+        t3 = max(20, int(timeout_total * 0.25))
         success, df_res, df_lap = self._solve_skenario(
             timeout_sec=t3,
             strict_mgmp=False,
             allow_same_day_multisession=True,
+            force_flexible_3jp=True,
         )
         if success:
-            return (
-                True,
-                df_res,
-                df_lap,
-                "Solusi Fleksibel (Semua JP Berhasil Terjadwal)",
-            )
+            return True, df_res, df_lap, "Solusi Fleksibel (Semua JP Terjadwal)"
 
         return False, pd.DataFrame(), pd.DataFrame(), "Solver Tidak Menemukan Solusi"
 
