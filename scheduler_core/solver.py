@@ -167,16 +167,12 @@ class SchedulerSolver:
                             self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
 
             # ---------------------------------------------------------
-            # VALIDASI KHUSUS MAPEL M09 & M10 UNTUK SEMUA KELAS (7, 8, 9)
-            # - Blok > 1 JP: Jam ke 1-4 saja (TIDAK BOLEH > Jam 4)
-            # - Blok 1 JP  : Boleh di atas jam ke-4, tapi TIDAK BOLEH > Jam 6
+            # HARD LIMIT: M09 & M10 TAPI TIDAK BOLEH DI ATAS JAM KE-6
             # ---------------------------------------------------------
             if mapel in target_mapel_m09_m10:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
-                        if jp > 1 and jam > 4:
-                            self.model.Add(self.variables[(t_id, hari, jam)] == 0)
-                        elif jp == 1 and jam > 6:
+                        if jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
             # PJOK Jam Maksimal Jam ke-6
@@ -264,15 +260,28 @@ class SchedulerSolver:
                         self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
         # =============================================================
-        # SOFT CONSTRAINTS (PJOK Siang)
+        # SOFT CONSTRAINTS (PRIORITAS MAPEL M09 & M10 KE JAM 1-4)
         # =============================================================
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
-            for hari in self.list_hari:
-                for jam in self.jam_per_hari[hari]:
-                    if mapel in self.mapel_pjok and jam > 3:
-                        self.penalties.append(self.variables[(t_id, hari, jam)] * 500)
+            jp = t["jp"]
+            
+            # M09 & M10: Diprioritaskan di jam 1-4 dengan penalti sangat tinggi jika meleset ke jam 5-6
+            if mapel in target_mapel_m09_m10:
+                for hari in self.list_hari:
+                    for jam in self.jam_per_hari[hari]:
+                        if jp > 1 and jam > 4:
+                            self.penalties.append(self.variables[(t_id, hari, jam)] * 8000)
+                        elif jp == 1 and jam > 4:
+                            self.penalties.append(self.variables[(t_id, hari, jam)] * 3000)
+
+            # PJOK Siang Penalty
+            if mapel in self.mapel_pjok:
+                for hari in self.list_hari:
+                    for jam in self.jam_per_hari[hari]:
+                        if jam > 3:
+                            self.penalties.append(self.variables[(t_id, hari, jam)] * 500)
 
         if self.penalties:
             self.model.Minimize(sum(self.penalties))
