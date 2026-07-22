@@ -80,7 +80,7 @@ class SchedulerSolver:
             if kode == "M11" or "JASMANI" in str(row["Nama_Mapel"]).upper():
                 self.mapel_pjok.add(str(row["ID_Mapel"]).strip())
 
-        # 3. Deteksi Status GTT & Hari MGMP (dari Guru & Mapel)
+        # 3. Deteksi Status GTT & Hari MGMP (dari Sheet Guru & Mapel)
         self.guru_gtt_set = set()
         self.guru_mgmp_dict = {}
 
@@ -88,7 +88,6 @@ class SchedulerSolver:
         for _, row in self.guru.iterrows():
             g_id = str(row["ID_Guru"]).strip()
             
-            # Cek Status GTT / Honor
             status_str = ""
             for col in ["Status", "Kategori", "Status_Guru", "Jenis_Guru"]:
                 if col in row and pd.notna(row[col]):
@@ -129,6 +128,17 @@ class SchedulerSolver:
                     [self.variables[(t_id, hari, jam)] for jam in self.jam_per_hari[hari]]
                 )
 
+        # Cari Kunci Hari Kamis
+        kamis_key = next((h for h in self.list_hari if h.strip().lower() == "kamis"), None)
+
+        # Pemetaan Slot Jam Eksplisit Mapel M01 (Agama) di Hari Kamis
+        m01_slot_mapping = {
+            "7A": [1, 2, 3],
+            "8A": [4, 5, 6],
+            "8C": [4, 5, 6],
+            "9A": [7, 8, 9]
+        }
+
         # =============================================================
         # HARD CONSTRAINTS
         # =============================================================
@@ -144,11 +154,21 @@ class SchedulerSolver:
             # Setiap blok tugas hanya aktif di 1 hari
             self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari) == 1)
 
-            # Agama M01 Kunci Hari Kamis untuk Rombel tertentu
-            if mapel == "M01" and rombel in ["7A", "8A", "8C", "9A"]:
-                kamis_key = next((h for h in self.list_hari if h.strip().lower() == "kamis"), None)
+            # ---------------------------------------------------------
+            # VALIDASI KHUSUS MAPEL M01 (AGAMA) DI HARI KAMIS
+            # ---------------------------------------------------------
+            if mapel == "M01" and rombel in m01_slot_mapping:
                 if kamis_key:
+                    # Kunci Hari ke Kamis
                     self.model.Add(tugas_hari_aktif[(t_id, kamis_key)] == 1)
+                    
+                    # Kunci Jam Sesuai Rombel (7A -> 1,2,3 | 8A & 8C -> 4,5,6 | 9A -> 7,8,9)
+                    target_jam = m01_slot_mapping[rombel]
+                    for jam in self.jam_per_hari[kamis_key]:
+                        if jam in target_jam:
+                            self.model.Add(self.variables[(t_id, kamis_key, jam)] == 1)
+                        else:
+                            self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
 
             # PJOK Jam Maksimal Jam ke-6
             if mapel in self.mapel_pjok:
@@ -165,18 +185,17 @@ class SchedulerSolver:
             guru = t["guru"]
             mapel = t["mapel"]
 
-            # Ambil hari MGMP dari dict Guru atau Mapel
             hari_mgmp_str = self.guru_mgmp_dict.get(guru) or self.mapel_mgmp_dict.get(mapel)
 
             if hari_mgmp_str:
                 hari_mgmp_match = next((h for h in self.list_hari if h.strip().lower() == hari_mgmp_str.lower()), None)
 
                 if hari_mgmp_match:
-                    # 1. GTT: MUTLAK LIBUR / FREE 100% DI HARI MGMP
+                    # 1. GTT: MUTLAK LIBUR DI HARI MGMP
                     if guru in self.guru_gtt_set:
                         self.model.Add(tugas_hari_aktif[(t_id, hari_mgmp_match)] == 0)
                     
-                    # 2. NON-GTT: UTAMAKAN JAM 1 SAMPAI max_jam_mgmp_nongtt (BERI PENALTI JIKA DI ATASNYA)
+                    # 2. NON-GTT: DIUTAMAKAN HINGGA max_jam_mgmp_nongtt
                     else:
                         for jam in self.jam_per_hari[hari_mgmp_match]:
                             if jam > max_jam_mgmp_nongtt:
@@ -249,7 +268,6 @@ class SchedulerSolver:
                     if mapel in self.mapel_pjok and jam > 3:
                         self.penalties.append(self.variables[(t_id, hari, jam)] * 500)
 
-        # Minimalkan total penalti
         if self.penalties:
             self.model.Minimize(sum(self.penalties))
 
