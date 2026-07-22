@@ -326,3 +326,44 @@ class SchedulerSolver:
             ).reset_index(drop=True)
 
         return df_hasil
+def generate_teacher_report(self, df_hasil):
+        """Menghasilkan laporan rekapitulasi jam mengajar per guru per hari.
+
+        :param df_hasil: DataFrame hasil ekstrak dari extract_results()
+        :return: DataFrame laporan guru
+        """
+        if df_hasil.empty:
+            return pd.DataFrame(
+                columns=["ID_Guru", "Hari", "Total_JP", "Detail_Kelas"]
+            )
+
+        # Kelompokkan data berdasarkan Guru dan Hari
+        laporan = (
+            df_hasil.groupby(["ID_Guru", "Hari"])
+            .agg(
+                Total_JP=("Jam_Ke", "count"),
+                Detail_Kelas=(
+                    "ID_Rombel",
+                    lambda x: ", ".join(sorted(set(x))),
+                ),
+            )
+            .reset_index()
+        )
+
+        # Hitung juga total Keseluruhan JP per Guru
+        total_per_guru = (
+            df_hasil.groupby("ID_Guru")["Jam_Ke"]
+            .count()
+            .reset_index()
+            .rename(columns={"Jam_Ke": "Total_JP_Mingguan"})
+        )
+
+        # Gabungkan data
+        df_laporan = pd.merge(laporan, total_per_guru, on="ID_Guru", how="left")
+
+        # Urutkan berdasarkan Nama/ID Guru dan Hari
+        df_laporan = df_laporan.sort_values(
+            by=["ID_Guru", "Hari"]
+        ).reset_index(drop=True)
+
+        return df_laporan
