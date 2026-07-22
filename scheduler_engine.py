@@ -29,7 +29,7 @@ class Scheduler:
                 df.columns = [str(c).strip() for c in df.columns]
 
     def _get_safe_col(self, df, keywords):
-        """Pencarian kolom aman tanpa risiko KeyError."""
+        """Pencarian nama kolom dinamis & aman dari error."""
         if df.empty:
             return None
 
@@ -59,7 +59,7 @@ class Scheduler:
         return df.columns[0] if len(df.columns) > 0 else None
 
     def _parse_blok(self, val_blok, total_jp, allow_split_3jp=False):
-        """Membagi JP menjadi durasi blok ideal."""
+        """Membagi JP menjadi durasi blok presisi."""
         if pd.notna(val_blok) and str(val_blok).strip():
             s_val = str(val_blok).replace(";", ",").replace("-", ",")
             parts = [p.strip() for p in s_val.split(",") if p.strip()]
@@ -95,13 +95,13 @@ class Scheduler:
         timeout_sec,
         strict_mgmp=True,
         strict_m08=True,
-        allow_same_day_multisession=False,
-        allow_split_3jp=False,
+        strict_pagi=True,
+        max_jp_guru_per_hari=6,
         max_mapel_per_hari=5,
     ):
         model = cp_model.CpModel()
 
-        # Deteksi Kolom Mengajar
+        # Deteksi Kolom
         c_mengajar_rombel = self._get_safe_col(
             self.mengajar_df,
             ["id_rombel", "rombel", "kelas", "id kelas", "kelas / rombel"],
@@ -119,7 +119,6 @@ class Scheduler:
             ["beban_jp", "beban jp", "jp", "jumlah jp", "total jp"],
         )
 
-        # Deteksi Kolom Slot
         c_slot_hari = self._get_safe_col(
             self.slot_df, ["hari", "day", "hari kbm"]
         )
@@ -133,7 +132,7 @@ class Scheduler:
         if self.mengajar_df.empty or self.slot_df.empty:
             return False, pd.DataFrame(), pd.DataFrame()
 
-        # Filter Slot Pembelajaran
+        # Filter Slot Pembelajaran Utamakan KBM
         if c_slot_jenis and c_slot_jenis in self.slot_df.columns:
             mask = (
                 self.slot_df[c_slot_jenis]
@@ -163,7 +162,7 @@ class Scheduler:
 
         hari_list = list(dict.fromkeys([sh for (sh, sj) in slot_tuples]))
 
-        # Deteksi Mapel & Blok
+        # Mapel & Blok Format
         c_mapel_id = self._get_safe_col(
             self.mapel_df,
             ["id_mapel", "mapel", "mata pelajaran", "id mapel", "nama mapel"],
@@ -183,7 +182,7 @@ class Scheduler:
                 m_id = str(r_m[c_mapel_id]).strip()
                 blok_map[m_id] = r_m[c_mapel_blok]
 
-        # Sesi Mengajar
+        # Pembentukan Sesi Mengajar
         sessions = []
         for idx, row in self.mengajar_df.iterrows():
             rombel = str(row[c_mengajar_rombel]).strip()
@@ -197,7 +196,7 @@ class Scheduler:
 
             raw_blok = blok_map.get(mapel, None)
             durations = self._parse_blok(
-                raw_blok, total_jp, allow_split_3jp=allow_split_3jp
+                raw_blok, total_jp, allow_split_3jp=False
             )
 
             for s_idx, dur in enumerate(durations):
@@ -249,8 +248,9 @@ class Scheduler:
                                 X[(s_id, h, bj)] == 1
                             ).OnlyEnforceIf(S[(s_id, h, j)])
 
-        # Aturan Hard Constraints
-        # 1. Pasang Setiap Sesi Tepat 1x
+        # ==================== HARD CONSTRAINTS ====================
+
+        # 1. Pasang Setiap Sesi Tepat 1 Kali
         for s in sessions:
             s_id = s["session_id"]
             model.Add(
@@ -275,32 +275,25 @@ class Scheduler:
                 model.Add(sum(X[(s_id, h, j)] for s_id in s_ids_g) <= 1)
 
         # 4. Mapel Sama Maksimal 1x Sehari per Rombel
-        if not allow_same_day_multisession:
-            for r in rombel_list:
-                mapel_in_r = set(
-                    s["mapel"] for s in sessions if s["rombel"] == r
-                )
-                for m in mapel_in_r:
-                    s_m = [
-                        s
-                        for s in sessions
-                        if s["rombel"] == r and s["mapel"] == m
-                    ]
-                    if len(s_m) > 1:
-                        for h in hari_list:
-                            j_in_h = [
-                                sj for (sh, sj) in slot_tuples if sh == h
-                            ]
-                            model.Add(
-                                sum(
-                                    S[(s["session_id"], h, j)]
-                                    for s in s_m
-                                    for j in j_in_h
-                                )
-                                <= 1
+        for r in rombel_list:
+            mapel_in_r = set(s["mapel"] for s in sessions if s["rombel"] == r)
+            for m in mapel_in_r:
+                s_m = [
+                    s for s in sessions if s["rombel"] == r and s["mapel"] == m
+                ]
+                if len(s_m) > 1:
+                    for h in hari_list:
+                        j_in_h = [sj for (sh, sj) in slot_tuples if sh == h]
+                        model.Add(
+                            sum(
+                                S[(s["session_id"], h, j)]
+                                for s in s_m
+                                for j in j_in_h
                             )
+                            <= 1
+                        )
 
-        # 5. Batasan Maksimal Mapel per Hari per Rombel (Maks 5)
+        # 5. MAKSIMAL 5 MAPEL PER HARI PER ROMBEL
         if max_mapel_per_hari is not None and max_mapel_per_hari > 0:
             for r in rombel_list:
                 mapel_in_r = list(
@@ -316,36 +309,50 @@ class Scheduler:
                             for s in sessions
                             if s["rombel"] == r and s["mapel"] == m
                         ]
-                        has_mapel_on_day = model.NewBoolVar(
-                            f"has_m_{m}_{r}_{h}"
-                        )
+                        has_m = model.NewBoolVar(f"has_m_{m}_{r}_{h}")
 
                         sessions_on_day = [
                             X[(s_id, h, j)] for s_id in s_m for j in j_in_h
                         ]
-                        model.Add(sum(sessions_on_day) > 0).OnlyEnforceIf(
-                            has_mapel_on_day
-                        )
+                        model.Add(sum(sessions_on_day) > 0).OnlyEnforceIf(has_m)
                         model.Add(sum(sessions_on_day) == 0).OnlyEnforceIf(
-                            has_mapel_on_day.Not()
+                            has_m.Not()
                         )
 
-                        mapel_present_vars.append(has_mapel_on_day)
+                        mapel_present_vars.append(has_m)
 
                     model.Add(sum(mapel_present_vars) <= max_mapel_per_hari)
 
-        # 6. Pancasila / M08 Jam 1-4
-        if strict_m08:
+        # 6. BATASAN MAKSIMAL JP GURU PER HARI (Pemerataan Beban)
+        if max_jp_guru_per_hari is not None and max_jp_guru_per_hari > 0:
+            for g in guru_list:
+                s_ids_g = [s["session_id"] for s in sessions if s["guru"] == g]
+                for h in hari_list:
+                    j_in_h = [sj for (sh, sj) in slot_tuples if sh == h]
+                    model.Add(
+                        sum(X[(s_id, h, j)] for s_id in s_ids_g for j in j_in_h)
+                        <= max_jp_guru_per_hari
+                    )
+
+        # 7. BATASAN JAM PAGI (Pancasila / M08 & Olahraga PJOK)
+        if strict_m08 or strict_pagi:
             for s in sessions:
-                if "pancasila" in str(s["mapel"]).lower() or str(
-                    s["mapel"]
-                ).strip().upper() == "M08":
-                    s_id = s["session_id"]
+                m_name = str(s["mapel"]).lower()
+                s_id = s["session_id"]
+
+                # Pancasila / M08 -> Jam 1-4
+                if "pancasila" in m_name or "m08" in m_name.upper():
                     for h, j in slot_tuples:
                         if j > 4:
                             model.Add(X[(s_id, h, j)] == 0)
 
-        # 7. MGMP Guru
+                # Olahraga / PJOK -> Jam 1-3
+                if "olahraga" in m_name or "pjok" in m_name:
+                    for h, j in slot_tuples:
+                        if j > 3:
+                            model.Add(X[(s_id, h, j)] == 0)
+
+        # 8. HARI MGMP GURU
         c_guru_id = self._get_safe_col(
             self.guru_df, ["id_guru", "guru", "nama guru", "id guru"]
         )
@@ -376,14 +383,22 @@ class Scheduler:
                             for s_id in s_ids_g:
                                 model.Add(X[(s_id, h, j)] == 0)
 
-        # 🎯 ATURAN OPTIMASI KERAPIAN (SOFT CONSTRAINTS / OBJECTIVE)
-        # Utamakan menempatkan jadwal pada jam-jam awal (KBM padat & terstruktur)
+        # ==================== SOFT CONSTRAINTS (KERAPIAN) ====================
         penalty_terms = []
+
+        # 1. Pinalti Jam Akhir (Agar Pelajaran Dipadatkan dari Jam Pertama)
         for s in sessions:
             s_id = s["session_id"]
+            m_name = str(s["mapel"]).lower()
+            is_heavy = any(
+                k in m_name
+                for k in ["matematika", "mtk", "ipa", "fisika", "inggris"]
+            )
+
             for h, j in slot_tuples:
-                # Memberikan pinalti kecil untuk jam-jam akhir agar jadwal terkumpul rapat di depan
-                penalty_terms.append(X[(s_id, h, j)] * (j * 2))
+                # Mapel Berat (Matematika/IPA/B.Inggris) diutamakan Jam 1-4
+                weight = (j * 5) if is_heavy else (j * 2)
+                penalty_terms.append(X[(s_id, h, j)] * weight)
 
         model.Minimize(sum(penalty_terms))
 
@@ -428,54 +443,59 @@ class Scheduler:
     def solve_with_fallback(self, timeout_total=180, progress_callback=None):
         if progress_callback:
             progress_callback(
-                "Menyusun & Mengoptimalkan Kerapian Jadwal (Maks 5 Mapel/Hari)..."
+                "Menyusun Jadwal Sesuai Seluruh Peraturan Baku Sekolah..."
             )
 
-        t1 = max(30, int(timeout_total * 0.4))
+        # Stage 1: Full Strict Rules
+        t1 = max(40, int(timeout_total * 0.5))
         success, df_res, df_lap = self._solve_skenario(
             t1,
             strict_mgmp=True,
             strict_m08=True,
-            allow_same_day_multisession=False,
-            allow_split_3jp=False,
+            strict_pagi=True,
+            max_jp_guru_per_hari=6,
             max_mapel_per_hari=5,
         )
         if success:
-            return True, df_res, df_lap, "Selesai (Jadwal Rapi & Teroptimasi)"
+            return True, df_res, df_lap, "Selesai (Memenuhi 100% Peraturan Baku)"
 
+        # Stage 2: Relaksasi MGMP jika slot guru padat
         if progress_callback:
-            progress_callback("Relaksasi MGMP dengan Kerapian Optimum...")
-        t2 = max(25, int(timeout_total * 0.3))
+            progress_callback(
+                "Mengoptimalkan Jadwal (Penyesuaian MGMP Guru)..."
+            )
+        t2 = max(30, int(timeout_total * 0.3))
         success, df_res, df_lap = self._solve_skenario(
             t2,
             strict_mgmp=False,
             strict_m08=True,
-            allow_same_day_multisession=False,
-            allow_split_3jp=False,
+            strict_pagi=True,
+            max_jp_guru_per_hari=7,
             max_mapel_per_hari=5,
         )
         if success:
-            return True, df_res, df_lap, "Selesai (Relaksasi MGMP - Rapi)"
+            return True, df_res, df_lap, "Selesai (Relaksasi Jam MGMP Guru)"
 
+        # Stage 3: Fleksibel
         if progress_callback:
-            progress_callback("Penyusunan Fleksibel Teratur...")
-        t3 = max(20, int(timeout_total * 0.3))
+            progress_callback("Penyusunan Mode Fleksibel...")
+        t3 = max(20, int(timeout_total * 0.2))
         success, df_res, df_lap = self._solve_skenario(
             t3,
             strict_mgmp=False,
             strict_m08=False,
-            allow_same_day_multisession=True,
-            allow_split_3jp=True,
+            strict_pagi=False,
+            max_jp_guru_per_hari=8,
             max_mapel_per_hari=5,
         )
         if success:
-            return True, df_res, df_lap, "Selesai (Fleksibel - Rapi)"
+            return True, df_res, df_lap, "Selesai (Mode Fleksibel)"
 
         return (
             False,
             pd.DataFrame(),
             pd.DataFrame(),
-            "Gagal menyusun jadwal. Cek kecukupan slot jam mengajar.",
+            "Gagal menyusun jadwal. Mohon periksa jumlah slot jam KBM atau beban JP guru.",
         )
 
     def generate(self, timeout=120):
