@@ -16,7 +16,13 @@ class SchedulerSolver:
         self.mapel = scheduler.mapel.copy()
         self.slot = scheduler.slot.copy()
 
-        for df in [self.guru, self.rombel, self.mengajar, self.mapel, self.slot]:
+        for df in [
+            self.guru,
+            self.rombel,
+            self.mengajar,
+            self.mapel,
+            self.slot,
+        ]:
             df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
 
         # Sanitasi String
@@ -161,6 +167,7 @@ class SchedulerSolver:
         timeout_seconds=120,
         max_jam_mgmp_nongtt=4,
         max_jp_per_hari=6,
+        log_search=False,
     ):
         # Reset Model untuk Eksekusi Ulang
         self.model = cp_model.CpModel()
@@ -203,7 +210,7 @@ class SchedulerSolver:
             mapel = t["mapel"]
             rombel = t["rombel"]
 
-            # Pemenuhan JP
+            # Pemenuhan Total JP Per Tugas
             self.model.Add(
                 sum(
                     self.variables[(t_id, hari, jam)]
@@ -219,7 +226,7 @@ class SchedulerSolver:
                 == 1
             )
 
-            # Penalti Lunak Agama M01
+            # Penalti Lunak Agama M01 (Preferensi Kamis)
             if mapel == "M01" and kamis_key:
                 if rombel in ["7A", "8A", "8C", "9A"]:
                     self.penalties.append(
@@ -232,7 +239,7 @@ class SchedulerSolver:
                     (1 - tugas_hari_aktif[(t_id, kamis_key)]) * 500
                 )
 
-            # Batasan PJOK (Max Jam ke-6)
+            # Batasan PJOK (Maksimal Jam ke-6)
             if mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari.get(hari, []):
@@ -266,7 +273,7 @@ class SchedulerSolver:
                                     == 0
                                 )
                             else:
-                                # Guru Reguler: Boleh mengajar HANYA sampai jam_ke (misal Max Jam ke-4)
+                                # Guru Reguler: Boleh mengajar HANYA sampai max_jam_mgmp_nongtt
                                 if jam > max_jam_mgmp_nongtt:
                                     self.model.Add(
                                         self.variables[
@@ -362,8 +369,10 @@ class SchedulerSolver:
 
         # Eksekusi Solver
         self.solver = cp_model.CpSolver()
-        self.solver.parameters.max_time_in_seconds = timeout_seconds
+        self.solver.parameters.max_time_in_seconds = float(timeout_seconds)
         self.solver.parameters.num_search_workers = 4
+        self.solver.parameters.log_search_progress = bool(log_search)
+
         status = self.solver.Solve(self.model)
 
         return status in [cp_model.OPTIMAL, cp_model.FEASIBLE]
@@ -399,7 +408,13 @@ class SchedulerSolver:
     def generate_teacher_report(self, df_hasil):
         if df_hasil.empty:
             return pd.DataFrame(
-                columns=["ID_Guru", "Hari", "Total_JP", "Detail_Kelas"]
+                columns=[
+                    "ID_Guru",
+                    "Hari",
+                    "Total_JP",
+                    "Detail_Kelas",
+                    "Total_JP_Mingguan",
+                ]
             )
 
         laporan = (
