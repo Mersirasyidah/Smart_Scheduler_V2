@@ -83,7 +83,7 @@ class SchedulerSolver:
                     })
                     tugas_id += 1
 
-        # Identifikasi Mapel PJOK
+        # Identifikasi Mapel PJOK (M11)
         self.mapel_pjok = set()
         for _, row in self.mapel.iterrows():
             kode = str(row["ID_Mapel"]).strip().upper()
@@ -193,20 +193,13 @@ class SchedulerSolver:
                             self.model.Add(self.variables[(t_id, kamis_key, jam)] == 0)
 
             # ---------------------------------------------------------
-            # ATURAN SPESIFIK M09, M10, DAN M11 (PJOK)
+            # ATURAN MAPEL M09, M10, DAN M11 (BATAS MAKSIMAL JAM KE-6)
             # ---------------------------------------------------------
-            # 1. KHUSUS M09: Dilarang keras di luar Jam 1 dan Jam 2
-            if mapel == "M09":
-                for hari in self.list_hari:
-                    for jam in self.jam_per_hari[hari]:
-                        if jam > 2:
-                            self.model.Add(self.variables[(t_id, hari, jam)] == 0)
-
-            # 2. KHUSUS M10 DAN M11 (PJOK): Maksimal Jam ke-6 (Jam 1 s/d 6 diperbolehkan)
-            elif mapel == "M10" or mapel in self.mapel_pjok:
+            if mapel in ["M09", "M10"] or mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam > 6:
+                            # Dilarang di jam 7, 8, 9
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
         # -------------------------------------------------------------
@@ -278,11 +271,22 @@ class SchedulerSolver:
                     else:
                         self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
-        # Soft Constraints: Berikan insentif/prioritas agar M10 dan PJOK berada lebih pagi jika memungkinkan
+        # =============================================================
+        # SOFT CONSTRAINTS (PRIORITAS & PENALTI SWAPPING)
+        # =============================================================
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
-            if mapel == "M10" or mapel in self.mapel_pjok:
+
+            # Prioritaskan M09 di Jam 1-2. Berikan penalti tinggi jika terpaksa mundur ke Jam 3-6.
+            if mapel == "M09":
+                for hari in self.list_hari:
+                    for jam in self.jam_per_hari[hari]:
+                        if jam > 2:
+                            self.penalties.append(self.variables[(t_id, hari, jam)] * 1000)
+
+            # M11 (PJOK) dan M10 fleksibel, tapi diprioritaskan Pagi jika memungkinkan
+            elif mapel == "M10" or mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari[hari]:
                         if jam in [4, 5, 6]:
@@ -300,13 +304,17 @@ class SchedulerSolver:
         return status in [cp_model.OPTIMAL, cp_model.FEASIBLE]
 
     def extract_results(self):
+        """
+        Menggabungkan hasil ekstraksi Kelas 9 yang baru dengan
+        jadwal Kelas 7 & 8 yang sudah ada sehingga menghasilkan jadwal utuh Kelas 7 - 9.
+        """
         if self.solver is None:
             return self.df_existing
 
         rows = []
         tugas_lookup = {t["id_tugas"]: t for t in self.tugas_mengajar}
 
-        # 1. Ambil Hasil Jadwal Baru Khusus Kelas 9
+        # 1. Ambil Hasil Penjadwalan Baru untuk Kelas 9
         for (t_id, hari, jam), var in self.variables.items():
             if self.solver.Value(var) == 1:
                 t = tugas_lookup[t_id]
@@ -320,13 +328,14 @@ class SchedulerSolver:
 
         df_k9 = pd.DataFrame(rows)
 
-        # 2. GABUNGKAN HASIL KELAS 9 DENGAN JADWAL KELAS 7 & 8 YANG LAMA
+        # 2. Gabungkan Kembali dengan Jadwal Kelas 7 & 8
         if not self.df_existing.empty:
             df_k78 = self.df_existing[~self.df_existing["ID_Rombel"].astype(str).str.startswith("9")].copy()
             df_gabungan = pd.concat([df_k78, df_k9], ignore_index=True)
         else:
             df_gabungan = df_k9
 
+        # 3. Urutkan Jadwal Utuh (Kelas 7, 8, dan 9)
         if not df_gabungan.empty:
             df_gabungan = df_gabungan.sort_values(by=["Hari", "ID_Rombel", "Jam_Ke"]).reset_index(drop=True)
             
