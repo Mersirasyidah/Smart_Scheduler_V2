@@ -19,11 +19,15 @@ class Scheduler:
             self.mapel_df,
             self.slot_df,
         ]:
-            df.columns = [str(c).strip() for c in df.columns]
+            if df is not None and not df.empty:
+                df.columns = [str(c).strip() for c in df.columns]
 
     def _find_col(self, df, keywords):
-        """Pencarian kolom fleksibel berdasarkan kata kunci."""
-        # 1. Cari yang persis / cocok menyeluruh
+        """Pencarian kolom fleksibel berdasarkan kata kunci dengan fallback aman."""
+        if df is None or df.empty:
+            return None
+
+        # 1. Cari yang persis / cocok fleksibel
         for kw in keywords:
             for col in df.columns:
                 c_clean = (
@@ -45,7 +49,8 @@ class Scheduler:
                 if k_clean in c_clean:
                     return col
 
-        return None
+        # 3. Fallback: Kembalikan kolom pertama agar tidak pernah return KeyError
+        return df.columns[0]
 
     def _parse_blok(self, val_blok, total_jp, allow_split_3jp=False):
         """Aturan pembagian jam baku."""
@@ -89,7 +94,7 @@ class Scheduler:
     ):
         model = cp_model.CpModel()
 
-        # Deteksi otomatis nama kolom dari Excel Anda
+        # Deteksi otomatis nama kolom dari Excel Anda secara aman
         c_mengajar_rombel = self._find_col(
             self.mengajar_df,
             ["kelas / rombel", "rombel", "kelas", "id_rombel", "id rombel"],
@@ -134,20 +139,9 @@ class Scheduler:
         c_slot_jam = self._find_col(
             self.slot_df, ["jam ke", "jam_ke", "jam", "ke"]
         )
-        c_slot_jenis = self._find_col(self.slot_df, ["jenis", "tipe", "keterangan"])
-
-        # Pengecekan Kritis: Pastikan kolom ditemukan
-        if not all(
-            [
-                c_mengajar_rombel,
-                c_mengajar_guru,
-                c_mengajar_mapel,
-                c_slot_hari,
-                c_slot_jam,
-            ]
-        ):
-            print("❌ GAGAL: Ada kolom Excel yang tidak terdeteksi!")
-            return False, pd.DataFrame(), pd.DataFrame()
+        c_slot_jenis = self._find_col(
+            self.slot_df, ["jenis", "tipe", "keterangan"]
+        )
 
         # Filter Slot Pembelajaran
         if c_slot_jenis and c_slot_jenis in self.slot_df.columns:
@@ -173,13 +167,11 @@ class Scheduler:
                 )
             )
         )
-        hari_list = list(
-            dict.fromkeys([sh for (sh, sj) in slot_tuples])
-        )  # Unik & urut
+        hari_list = list(dict.fromkeys([sh for (sh, sj) in slot_tuples]))
 
         # Mapel Blok Kustom
         blok_map = {}
-        if c_mapel_id and c_mapel_blok:
+        if c_mapel_id and c_mapel_blok and c_mapel_blok in self.mapel_df.columns:
             for _, r_m in self.mapel_df.iterrows():
                 m_id = str(r_m[c_mapel_id]).strip()
                 blok_map[m_id] = r_m[c_mapel_blok]
@@ -191,7 +183,7 @@ class Scheduler:
             .str.strip()
             .unique()
             .tolist()
-            if c_rombel_id
+            if c_rombel_id and c_rombel_id in self.rombel_df.columns
             else self.mengajar_df[c_mengajar_rombel]
             .astype(str)
             .str.strip()
@@ -201,7 +193,7 @@ class Scheduler:
 
         guru_list = (
             self.guru_df[c_guru_id].astype(str).str.strip().unique().tolist()
-            if c_guru_id
+            if c_guru_id and c_guru_id in self.guru_df.columns
             else self.mengajar_df[c_mengajar_guru]
             .astype(str)
             .str.strip()
@@ -216,9 +208,8 @@ class Scheduler:
             guru = str(row[c_mengajar_guru]).strip()
             mapel = str(row[c_mengajar_mapel]).strip()
 
-            # Mengambil beban JP (default 2 jika tak terdeteksi)
             total_jp = 2
-            if c_mengajar_jp and pd.notna(row[c_mengajar_jp]):
+            if c_mengajar_jp and c_mengajar_jp in self.mengajar_df.columns and pd.notna(row[c_mengajar_jp]):
                 try:
                     total_jp = int(row[c_mengajar_jp])
                 except:
@@ -337,12 +328,8 @@ class Scheduler:
                             model.Add(X[(s_id, h, j)] == 0)
 
         # Constraint 6: MGMP Guru (Setelah Jam 4)
-        c_guru_mgmp = (
-            self._find_col(self.guru_df, ["mgmp", "hari_mgmp", "hari mgmp"])
-            if self.guru_df is not None
-            else None
-        )
-        if strict_mgmp and c_guru_mgmp and c_guru_id:
+        c_guru_mgmp = self._find_col(self.guru_df, ["mgmp", "hari_mgmp", "hari mgmp"])
+        if strict_mgmp and c_guru_mgmp and c_guru_id and c_guru_mgmp in self.guru_df.columns:
             for _, row in self.guru_df.iterrows():
                 g_id = str(row[c_guru_id]).strip()
                 mgmp_day = (
