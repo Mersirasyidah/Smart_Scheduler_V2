@@ -3,7 +3,7 @@ from ortools.sat.python import cp_model
 
 
 class SchedulerSolver:
-    """CP-SAT Solver Engine untuk Penjadwalan Sekolah Automatis."""
+    """CP-SAT Solver Engine untuk Penjadwalan Sekolah Otomatis."""
 
     def __init__(self, data_master):
         self.data = data_master
@@ -19,7 +19,7 @@ class SchedulerSolver:
         self.model = cp_model.CpModel()
         self.assignments = {}
 
-        # 1. Ambil data master
+        # Ambil data master secara fleksibel
         guru_df = getattr(self.data, "guru", pd.DataFrame())
         rombel_df = getattr(self.data, "rombel", pd.DataFrame())
         slot_df = getattr(self.data, "slot", pd.DataFrame())
@@ -28,16 +28,20 @@ class SchedulerSolver:
         if mengajar_df.empty or slot_df.empty:
             return False
 
-        # Prepare Decision Variables: X[tugas_idx, slot_idx]
+        # Preprocessing ID
+        col_rombel = "ID_Rombel" if "ID_Rombel" in rombel_df.columns else "Kelas"
+        col_mengajar_rombel = (
+            "ID_Rombel" if "ID_Rombel" in mengajar_df.columns else "Kelas"
+        )
+
+        # Inisialisasi Variabel Keputusan: X[tugas_idx, slot_idx]
         for t_idx, tugas in mengajar_df.iterrows():
-            jp_butuh = int(tugas.get("JP", 1))
             for s_idx, slot in slot_df.iterrows():
-                var_name = f"x_{t_idx}_{s_idx}"
                 self.assignments[(t_idx, s_idx)] = self.model.NewBoolVar(
-                    var_name
+                    f"x_{t_idx}_{s_idx}"
                 )
 
-        # Constraint 1: Setiap alokasi mengajar harus terpenuhi total JP-nya
+        # Constraint 1: Pemenuhan total JP tiap tugas mengajar
         for t_idx, tugas in mengajar_df.iterrows():
             jp_butuh = int(tugas.get("JP", 1))
             self.model.Add(
@@ -48,11 +52,11 @@ class SchedulerSolver:
                 == jp_butuh
             )
 
-        # Constraint 2: Rombel tidak boleh bentrok di slot jam yang sama
+        # Constraint 2: Mencegah Bentrok Rombel
         for s_idx in slot_df.index:
-            for rombel_id in rombel_df["ID_Rombel"].unique():
+            for r_id in rombel_df[col_rombel].unique():
                 tugas_rombel = mengajar_df[
-                    mengajar_df["ID_Rombel"] == rombel_id
+                    mengajar_df[col_mengajar_rombel] == r_id
                 ].index
                 if len(tugas_rombel) > 0:
                     self.model.Add(
@@ -63,11 +67,11 @@ class SchedulerSolver:
                         <= 1
                     )
 
-        # Constraint 3: Guru tidak boleh bentrok di slot jam yang sama
+        # Constraint 3: Mencegah Bentrok Guru
         for s_idx in slot_df.index:
-            for guru_id in guru_df["ID_Guru"].unique():
+            for g_id in guru_df["ID_Guru"].unique():
                 tugas_guru = mengajar_df[
-                    mengajar_df["ID_Guru"] == guru_id
+                    mengajar_df["ID_Guru"] == g_id
                 ].index
                 if len(tugas_guru) > 0:
                     self.model.Add(
@@ -78,8 +82,9 @@ class SchedulerSolver:
                         <= 1
                     )
 
-        # Set Solver Parameters
+        # Set Parameter Solver
         self.solver.parameters.max_time_in_seconds = float(timeout_seconds)
+        self.solver.parameters.num_search_workers = 4
         self.status = self.solver.Solve(self.model)
 
         return self.status in (cp_model.OPTIMAL, cp_model.FEASIBLE)
@@ -98,13 +103,16 @@ class SchedulerSolver:
                 tugas = mengajar_df.loc[t_idx]
                 slot = slot_df.loc[s_idx]
 
+                rombel_val = tugas.get(
+                    "ID_Rombel", tugas.get("Kelas", "Rombel")
+                )
+                jam_val = slot.get("Jam_Ke", slot.get("Jam", "1"))
+
                 results.append(
                     {
                         "Hari": slot.get("Hari", "-"),
-                        "Jam_Ke": slot.get("Jam_Ke", slot.get("Jam", "-")),
-                        "ID_Rombel": tugas.get(
-                            "ID_Rombel", tugas.get("Kelas", "-")
-                        ),
+                        "Jam_Ke": jam_val,
+                        "ID_Rombel": rombel_val,
                         "ID_Guru": tugas.get("ID_Guru", "-"),
                         "ID_Mapel": tugas.get("ID_Mapel", "-"),
                     }
@@ -112,11 +120,13 @@ class SchedulerSolver:
 
         df_res = pd.DataFrame(results)
         if not df_res.empty and "Hari" in df_res.columns:
-            df_res = df_res.sort_values(by=["Hari", "Jam_Ke"])
+            df_res = df_res.sort_values(by=["Hari", "Jam_Ke"]).reset_index(
+                drop=True
+            )
         return df_res
 
     def generate_teacher_report(self, df_results):
-        """Membuat laporan total jam mengajar per guru."""
+        """Membuat laporan rekapitulasi jam mengajar guru."""
         if df_results is None or df_results.empty:
             return pd.DataFrame()
 
@@ -132,31 +142,25 @@ def execute_scheduler_with_fallback(scheduler_data):
     """Fungsi pembantu untuk mencoba eksekusi dengan beberapa skenario pelonggaran constraint."""
     solver = SchedulerSolver(scheduler_data)
 
-    # Skenario 1: Strict (Timeout 60 detik, Max JP 6)
-    success = solver.run_solver(
+    # Skenario 1: Strict
+    if solver.run_solver(
         timeout_seconds=60, max_jam_mgmp_nongtt=4, max_jp_per_hari=6
-    )
-    if success:
-        df_jadwal = solver.extract_results()
-        df_laporan = solver.generate_teacher_report(df_jadwal)
-        return df_jadwal, df_laporan
+    ):
+        df_j = solver.extract_results()
+        return df_j, solver.generate_teacher_report(df_j)
 
-    # Skenario 2: Medium (Timeout 90 detik, Max JP 8)
-    success = solver.run_solver(
+    # Skenario 2: Medium
+    if solver.run_solver(
         timeout_seconds=90, max_jam_mgmp_nongtt=6, max_jp_per_hari=8
-    )
-    if success:
-        df_jadwal = solver.extract_results()
-        df_laporan = solver.generate_teacher_report(df_jadwal)
-        return df_jadwal, df_laporan
+    ):
+        df_j = solver.extract_results()
+        return df_j, solver.generate_teacher_report(df_j)
 
-    # Skenario 3: Relaxed (Timeout 120 detik)
-    success = solver.run_solver(
+    # Skenario 3: Relaxed
+    if solver.run_solver(
         timeout_seconds=120, max_jam_mgmp_nongtt=8, max_jp_per_hari=10
-    )
-    if success:
-        df_jadwal = solver.extract_results()
-        df_laporan = solver.generate_teacher_report(df_jadwal)
-        return df_jadwal, df_laporan
+    ):
+        df_j = solver.extract_results()
+        return df_j, solver.generate_teacher_report(df_j)
 
     return pd.DataFrame(), pd.DataFrame()
