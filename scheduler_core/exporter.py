@@ -2,10 +2,6 @@ import io
 import pandas as pd
 
 
-class ScheduleExpimport io
-import pandas as pd
-
-
 class ScheduleExporter:
 
   ALL_ROMBEL = [
@@ -29,16 +25,12 @@ class ScheduleExporter:
 
   @staticmethod
   def format_timetable(df_results, mapel_df=None):
-    """Mengubah dataframe hasil jadwal menjadi matriks pivot (Hari & Jam vs Kelas)
-
-    Mencegah AttributeError ketika dipanggil dari UI Streamlit.
-    """
+    """Mengubah dataframe hasil jadwal menjadi matriks pivot (Hari & Jam vs Kelas)"""
     if df_results is None or df_results.empty:
       return pd.DataFrame()
 
     df = df_results.copy()
 
-    # Deteksi otomatis nama kolom
     col_hari = 'Hari' if 'Hari' in df.columns else df.columns[0]
     col_jam = (
         'Jam Ke'
@@ -79,7 +71,6 @@ class ScheduleExporter:
         aggfunc=lambda x: ' / '.join(x.astype(str)),
     )
 
-    # Pastikan seluruh kolom rombel 7A-9E muncul
     target_cols = [c for c in ScheduleExporter.ALL_ROMBEL if c in pivot_df.columns]
     if target_cols:
       pivot_df = pivot_df.reindex(columns=ScheduleExporter.ALL_ROMBEL)
@@ -97,7 +88,6 @@ class ScheduleExporter:
 
     df = df_results.copy()
 
-    # Mapping nama kolom agar konsisten
     column_mapping = {
         'Hari': 'Hari',
         'Jam': 'Jam Ke',
@@ -132,10 +122,8 @@ class ScheduleExporter:
     output = io.BytesIO() if not isinstance(file_path, str) else file_path
 
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
-      # 1. Sheet 'Jadwal_Semua_Kelas'
       df_semua.to_excel(writer, sheet_name='Jadwal_Semua_Kelas', index=False)
 
-      # 2. Sheet per kelas (Kelas_7A - Kelas_9E)
       rombel_list = sorted(df_semua['Kelas / Rombel'].unique())
       target_rombels = [
           r for r in ScheduleExporter.ALL_ROMBEL if r in rombel_list
@@ -160,116 +148,6 @@ class ScheduleExporter:
         pivot_kelas = pivot_kelas.reindex(range(1, 10))
 
         pivot_kelas.to_excel(writer, sheet_name=f'Kelas_{rombel}')
-
-    if not isinstance(file_path, str):
-      output.seek(0)
-      return output
-
-    return file_pathorter:
-
-  ALL_ROMBEL = [
-      '7A',
-      '7B',
-      '7C',
-      '7D',
-      '7E',
-      '8A',
-      '8B',
-      '8C',
-      '8D',
-      '8E',
-      '9A',
-      '9B',
-      '9C',
-      '9D',
-      '9E',
-  ]
-  HARI_ORDER = ['Jumat', 'Kamis', 'Rabu', 'Selasa', 'Senin']
-
-  @staticmethod
-  def export_to_excel(df_results, file_path='Jadwal_Pelajaran_Lengkap.xlsx'):
-    """Mengekspor hasil penentuan jadwal ke format Excel persis seperti 'Jadwal baru.xlsx'
-
-    Sheet 1: 'Jadwal_Semua_Kelas' Sheet 2-16: 'Kelas_7A', 'Kelas_7B', ...,
-    'Kelas_9E'
-    """
-    if df_results is None or df_results.empty:
-      raise ValueError('Dataframe hasil penjadwalan kosong.')
-
-    df = df_results.copy()
-
-    # Normalisasi Nama Kolom jika ada variasi nama dari solver
-    column_mapping = {
-        'Hari': 'Hari',
-        'Jam': 'Jam Ke',
-        'Jam_Ke': 'Jam Ke',
-        'Kelas': 'Kelas / Rombel',
-        'ID_Rombel': 'Kelas / Rombel',
-        'Rombel': 'Kelas / Rombel',
-        'Nama_Guru': 'Nama Guru',
-        'Guru': 'Nama Guru',
-        'Guru_Nama': 'Nama Guru',
-        'Mata_Pelajaran': 'Mata Pelajaran',
-        'Mapel': 'Mata Pelajaran',
-        'Nama_Mapel': 'Mata Pelajaran',
-    }
-
-    df = df.rename(
-        columns={k: v for k, v in column_mapping.items() if k in df.columns}
-    )
-
-    # Pastikan kolom utama tersedia
-    required_cols = [
-        'Hari',
-        'Jam Ke',
-        'Kelas / Rombel',
-        'Nama Guru',
-        'Mata Pelajaran',
-    ]
-    for col in required_cols:
-      if col not in df.columns:
-        df[col] = '-'
-
-    # Filter dan susun urutan kolom Sheet 'Jadwal_Semua_Kelas'
-    df_semua = df[required_cols].copy()
-
-    output = io.BytesIO() if not isinstance(file_path, str) else file_path
-
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-      # 1. Tulis Sheet 'Jadwal_Semua_Kelas'
-      df_semua.to_excel(writer, sheet_name='Jadwal_Semua_Kelas', index=False)
-
-      # 2. Tulis Sheet untuk Setiap Kelas (Kelas_7A s.d. Kelas_9E)
-      rombel_list = sorted(df_semua['Kelas / Rombel'].unique())
-      # Menggunakan list lengkap rombel jika ada
-      target_rombels = [
-          r for r in ScheduleExporter.ALL_ROMBEL if r in rombel_list
-      ]
-      if not target_rombels:
-        target_rombels = rombel_list
-
-      for rombel in target_rombels:
-        df_kelas = df_semua[df_semua['Kelas / Rombel'] == rombel]
-
-        # Buat pivot matriks: Index = Jam Ke, Columns = Hari, Values = Nama Guru
-        pivot_kelas = df_kelas.pivot_table(
-            index='Jam Ke',
-            columns='Hari',
-            values='Nama Guru',
-            aggfunc='first',
-        )
-
-        # Pastikan kolom hari lengkap dan sesuai urutan
-        days_present = [
-            h for h in ScheduleExporter.HARI_ORDER if h in pivot_kelas.columns
-        ]
-        pivot_kelas = pivot_kelas.reindex(columns=days_present)
-
-        # Reindex Jam Ke 1 s.d. 9
-        pivot_kelas = pivot_kelas.reindex(range(1, 10))
-
-        sheet_name = f'Kelas_{rombel}'
-        pivot_kelas.to_excel(writer, sheet_name=sheet_name)
 
     if not isinstance(file_path, str):
       output.seek(0)
