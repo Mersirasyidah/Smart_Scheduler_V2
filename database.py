@@ -1,23 +1,56 @@
+import glob
 import os
 import pandas as pd
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Mengakomodasi file nama database_scheduler.xlsx
-DATABASE = os.path.join(BASE_DIR, "data", "database_scheduler.xlsx")
+
+def get_database_path():
+    """Mencari lokasi file database Excel secara fleksibel."""
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    # Daftar opsi lokasi yang dicoba
+    candidate_paths = [
+        # Dalam folder data/
+        os.path.join(BASE_DIR, "data", "database_scheduler.xlsx"),
+        os.path.join(BASE_DIR, "data", "database_scheduler_2.xlsx"),
+        # Di folder utama (sejajar app.py)
+        os.path.join(BASE_DIR, "database_scheduler.xlsx"),
+        os.path.join(BASE_DIR, "database_scheduler_2.xlsx"),
+    ]
+
+    # Cek kandidat path pasti
+    for path in candidate_paths:
+        if os.path.exists(path):
+            return path
+
+    # Jika tidak ketemu, cari file .xlsx apapun yang mengandung kata 'database' atau 'scheduler'
+    search_patterns = [
+        os.path.join(BASE_DIR, "data", "*.xlsx"),
+        os.path.join(BASE_DIR, "*.xlsx"),
+    ]
+
+    for pattern in search_patterns:
+        files = glob.glob(pattern)
+        for f in files:
+            filename = os.path.basename(f).lower()
+            if "scheduler" in filename or "database" in filename or "jadwal" in filename:
+                return f
+
+    return None
 
 
 def load_database():
-    """Membaca seluruh sheet dari file Excel master."""
-    if not os.path.exists(DATABASE):
+    """Membaca seluruh sheet dari file Excel yang ditemukan."""
+    db_path = get_database_path()
+    if not db_path or not os.path.exists(db_path):
         return {}
 
     try:
-        excel = pd.ExcelFile(DATABASE, engine="openpyxl")
+        excel = pd.ExcelFile(db_path, engine="openpyxl")
         data = {}
         for sheet in excel.sheet_names:
             clean_name = str(sheet).strip()
             data[clean_name] = pd.read_excel(
-                DATABASE, sheet_name=sheet, engine="openpyxl"
+                db_path, sheet_name=sheet, engine="openpyxl"
             )
         return data
     except Exception as e:
@@ -34,7 +67,7 @@ def get_all_data():
         for name in db.keys():
             if name.lower().strip() in [p.lower() for p in possible_names]:
                 df = db[name].copy()
-                # Standarisasi nama kolom: ubah spasi menjadi underscore 'ID Guru' -> 'ID_Guru'
+                # Standarisasi kolom: ubah 'ID Guru' menjadi 'ID_Guru'
                 df.columns = [
                     str(c).strip().replace(" ", "_") for c in df.columns
                 ]
