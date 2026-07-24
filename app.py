@@ -1,13 +1,8 @@
 import io
+import os
 import pandas as pd
 import streamlit as st
-from database import (
-    get_guru,
-    get_mapel,
-    get_mengajar,
-    get_rombel,
-    get_slot,
-)
+from database import get_all_data
 from solver import SchedulerSolver
 
 st.set_page_config(
@@ -20,7 +15,6 @@ st.caption(
 )
 
 
-# Wrapper Class Data
 class SchedulerData:
 
     def __init__(self, guru_df, rombel_df, mengajar_df, mapel_df, slot_df):
@@ -31,15 +25,14 @@ class SchedulerData:
         self.slot = slot_df
 
 
-# Inisialisasi Session State Data Master
-if "scheduler_data" not in st.session_state:
-    st.session_state["scheduler_data"] = None
-
 # Sidebar
-st.sidebar.header("📁 Unggah / Pilihan Data")
+st.sidebar.header("📁 Sumber Data Master")
 source_option = st.sidebar.radio(
-    "Pilih Sumber Data:", ["Database Default Excel", "Unggah File Excel Baru"]
+    "Pilih Sumber Data:",
+    ["Database Excel Lokal (data/)", "Unggah File Excel Baru"],
 )
+
+scheduler_data = None
 
 if source_option == "Unggah File Excel Baru":
     uploaded_file = st.sidebar.file_uploader(
@@ -48,53 +41,70 @@ if source_option == "Unggah File Excel Baru":
     if uploaded_file:
         try:
             excel_file = pd.ExcelFile(uploaded_file)
+            sheets = [s.strip() for s in excel_file.sheet_names]
+
             guru_df = pd.read_excel(excel_file, "Guru")
             rombel_df = pd.read_excel(excel_file, "Rombel")
             mengajar_df = pd.read_excel(excel_file, "Mengajar")
             mapel_df = pd.read_excel(excel_file, "Mapel")
             slot_df = pd.read_excel(excel_file, "Slot")
 
-            st.session_state["scheduler_data"] = SchedulerData(
+            scheduler_data = SchedulerData(
                 guru_df, rombel_df, mengajar_df, mapel_df, slot_df
             )
-            st.sidebar.success("✅ File Excel unggahan berhasil dibaca.")
+            st.sidebar.success("✅ File unggahan berhasil dimuat!")
         except Exception as e:
-            st.sidebar.error(f"❌ Gagal membaca file: {e}")
+            st.sidebar.error(f"❌ Error saat membaca file upload: {e}")
 else:
-    # Mengambil dari database.py
-    try:
-        guru_df = get_guru()
-        rombel_df = get_rombel()
-        mengajar_df = get_mengajar()
-        mapel_df = get_mapel()
-        slot_df = get_slot()
-
-        if not (guru_df.empty or mengajar_df.empty or slot_df.empty):
-            st.session_state["scheduler_data"] = SchedulerData(
-                guru_df, rombel_df, mengajar_df, mapel_df, slot_df
-            )
-            st.sidebar.success("✅ Database lokal siap digunakan.")
-        else:
-            st.session_state["scheduler_data"] = None
-    except Exception as e:
-        st.sidebar.error(f"❌ Error database: {e}")
+    # Membaca dari data/database_scheduler.xlsx via database.py
+    data_dict = get_all_data()
+    if data_dict:
+        scheduler_data = SchedulerData(
+            data_dict["guru"],
+            data_dict["rombel"],
+            data_dict["mengajar"],
+            data_dict["mapel"],
+            data_dict["slot"],
+        )
+        st.sidebar.success("✅ Database lokal berhasil dimuat!")
+    else:
+        st.sidebar.error("❌ Database lokal tidak lengkap / tidak ditemukan.")
 
 timeout_user = st.sidebar.slider(
     "Total Durasi Timeout Solver (Detik)", 30, 300, 120, 30
 )
 
-# Guard Clause Pengecekan Ketersediaan Data
-if st.session_state["scheduler_data"] is None:
+# ==========================================================
+# DIAGNOSTIK & GUARD CLAUSE
+# ==========================================================
+if scheduler_data is None:
     st.warning("⚠️ **Data Master Belum Siap!**")
     st.info(
-        "Silakan pastikan file `data/database_scheduler.xlsx` tersedia atau unggah file Excel di sidebar kiri."
+        "Silakan periksa keberadaan file `data/database_scheduler.xlsx` atau unggah file Excel di sidebar."
     )
+
+    # Menampilkan Status Pengecekan untuk Membantu Debugging
+    with st.expander("🔍 Klik untuk melihat Diagnostik Status Data"):
+        filepath = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "data",
+            "database_scheduler.xlsx",
+        )
+        st.write(f"**Lokasi File Expected:** `{filepath}`")
+        st.write(f"**File Ada?:** `{os.path.exists(filepath)}`")
+
+        if os.path.exists(filepath):
+            try:
+                xl = pd.ExcelFile(filepath, engine="openpyxl")
+                st.write(f"**Sheet yang Ditemukan di Excel:** {xl.sheet_names}")
+            except Exception as err:
+                st.write(f"**Gagal Membuka File:** {err}")
+
     st.stop()
 
 # ==========================================================
-# PROSES EKSEKUSI GENERATOR
+# RUN SOLVER
 # ==========================================================
-scheduler_data = st.session_state["scheduler_data"]
 st.success("🎉 Data Master (Guru, Rombel, Mengajar, Mapel, Slot) Siap!")
 
 if st.button("🚀 Proses Penjadwalan Otomatis", type="primary"):
@@ -145,7 +155,6 @@ if st.button("🚀 Proses Penjadwalan Otomatis", type="primary"):
                 df_hasil = solver.extract_results()
                 df_laporan = solver.generate_teacher_report(df_hasil)
 
-                # Format Gabungan Guru & Mapel untuk Tampilan Matriks
                 df_hasil["Guru_Mapel"] = (
                     df_hasil["ID_Guru"].astype(str)
                     + " ("
@@ -161,7 +170,6 @@ if st.button("🚀 Proses Penjadwalan Otomatis", type="primary"):
                     observed=False,
                 ).fillna("-")
 
-                # Tabs Tampilan
                 tab1, tab2, tab3 = st.tabs(
                     [
                         "📊 Matriks Jadwal Rombel",
@@ -182,7 +190,6 @@ if st.button("🚀 Proses Penjadwalan Otomatis", type="primary"):
                 with tab3:
                     st.dataframe(df_laporan, use_container_width=True)
 
-                # Download File Excel Result
                 output = io.BytesIO()
                 with pd.ExcelWriter(output, engine="openpyxl") as writer:
                     df_hasil.drop(
