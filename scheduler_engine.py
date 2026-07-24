@@ -17,7 +17,7 @@ class Scheduler:
         )
         self.slot_df = slot_df.copy() if slot_df is not None else pd.DataFrame()
 
-        # Normalisasi nama kolom
+        # Normalisasi nama kolom (hapus spasi depan/belakang)
         for df in [
             self.guru_df,
             self.rombel_df,
@@ -29,7 +29,7 @@ class Scheduler:
                 df.columns = [str(c).strip() for c in df.columns]
 
     def _get_safe_col(self, df, keywords):
-        """Pencarian nama kolom dinamis & aman dari error."""
+        """Pencarian nama kolom dinamis agar aman dari KeyError."""
         if df.empty:
             return None
 
@@ -98,10 +98,12 @@ class Scheduler:
         strict_pagi=True,
         max_jp_guru_per_hari=6,
         max_mapel_per_hari=5,
+        num_workers=4,
+        log_progress=False,
     ):
         model = cp_model.CpModel()
 
-        # Deteksi Kolom
+        # Deteksi Kolom Mengajar
         c_mengajar_rombel = self._get_safe_col(
             self.mengajar_df,
             ["id_rombel", "rombel", "kelas", "id kelas", "kelas / rombel"],
@@ -119,6 +121,7 @@ class Scheduler:
             ["beban_jp", "beban jp", "jp", "jumlah jp", "total jp"],
         )
 
+        # Deteksi Kolom Slot
         c_slot_hari = self._get_safe_col(
             self.slot_df, ["hari", "day", "hari kbm"]
         )
@@ -162,7 +165,7 @@ class Scheduler:
 
         hari_list = list(dict.fromkeys([sh for (sh, sj) in slot_tuples]))
 
-        # Mapel & Blok Format
+        # Deteksi Mapel & Format Blok
         c_mapel_id = self._get_safe_col(
             self.mapel_df,
             ["id_mapel", "mapel", "mata pelajaran", "id mapel", "nama mapel"],
@@ -216,7 +219,7 @@ class Scheduler:
         rombel_list = list(set(s["rombel"] for s in sessions))
         guru_list = list(set(s["guru"] for s in sessions))
 
-        # Decision Variables
+        # Variabel Keputusan (Decision Variables)
         S = {}
         X = {}
 
@@ -248,7 +251,7 @@ class Scheduler:
                                 X[(s_id, h, bj)] == 1
                             ).OnlyEnforceIf(S[(s_id, h, j)])
 
-        # ==================== HARD CONSTRAINTS ====================
+        # ==================== ATURAN MUTLAK (HARD CONSTRAINTS) ====================
 
         # 1. Pasang Setiap Sesi Tepat 1 Kali
         for s in sessions:
@@ -383,10 +386,10 @@ class Scheduler:
                             for s_id in s_ids_g:
                                 model.Add(X[(s_id, h, j)] == 0)
 
-        # ==================== SOFT CONSTRAINTS (KERAPIAN) ====================
+        # ==================== ATURAN KERAPIAN (SOFT CONSTRAINTS) ====================
         penalty_terms = []
 
-        # 1. Pinalti Jam Akhir (Agar Pelajaran Dipadatkan dari Jam Pertama)
+        # Pinalti Jam Akhir (Memadatkan Pelajaran dari Jam Pertama)
         for s in sessions:
             s_id = s["session_id"]
             m_name = str(s["mapel"]).lower()
@@ -396,16 +399,18 @@ class Scheduler:
             )
 
             for h, j in slot_tuples:
-                # Mapel Berat (Matematika/IPA/B.Inggris) diutamakan Jam 1-4
                 weight = (j * 5) if is_heavy else (j * 2)
                 penalty_terms.append(X[(s_id, h, j)] * weight)
 
         model.Minimize(sum(penalty_terms))
 
-        # Eksekusi Solver
+        # ==================== EKSEKUSI CP-SAT SOLVER ====================
         solver = cp_model.CpSolver()
+
+        # Config Parameter Solver
         solver.parameters.max_time_in_seconds = float(timeout_sec)
-        solver.parameters.num_search_workers = 4
+        solver.parameters.num_search_workers = int(num_workers)
+        solver.parameters.log_search_progress = bool(log_progress)
 
         status = solver.Solve(model)
 
@@ -440,13 +445,19 @@ class Scheduler:
         else:
             return False, pd.DataFrame(), pd.DataFrame()
 
-    def solve_with_fallback(self, timeout_total=180, progress_callback=None):
+    def solve_with_fallback(
+        self,
+        timeout_total=180,
+        num_workers=4,
+        log_progress=False,
+        progress_callback=None,
+    ):
         if progress_callback:
             progress_callback(
                 "Menyusun Jadwal Sesuai Seluruh Peraturan Baku Sekolah..."
             )
 
-        # Stage 1: Full Strict Rules
+        # Skenario 1: Full Strict Rules (Ideal)
         t1 = max(40, int(timeout_total * 0.5))
         success, df_res, df_lap = self._solve_skenario(
             t1,
@@ -455,11 +466,13 @@ class Scheduler:
             strict_pagi=True,
             max_jp_guru_per_hari=6,
             max_mapel_per_hari=5,
+            num_workers=num_workers,
+            log_progress=log_progress,
         )
         if success:
             return True, df_res, df_lap, "Selesai (Memenuhi 100% Peraturan Baku)"
 
-        # Stage 2: Relaksasi MGMP jika slot guru padat
+        # Skenario 2: Penyesuaian MGMP Guru
         if progress_callback:
             progress_callback(
                 "Mengoptimalkan Jadwal (Penyesuaian MGMP Guru)..."
@@ -472,11 +485,13 @@ class Scheduler:
             strict_pagi=True,
             max_jp_guru_per_hari=7,
             max_mapel_per_hari=5,
+            num_workers=num_workers,
+            log_progress=log_progress,
         )
         if success:
             return True, df_res, df_lap, "Selesai (Relaksasi Jam MGMP Guru)"
 
-        # Stage 3: Fleksibel
+        # Skenario 3: Mode Fleksibel
         if progress_callback:
             progress_callback("Penyusunan Mode Fleksibel...")
         t3 = max(20, int(timeout_total * 0.2))
@@ -487,6 +502,8 @@ class Scheduler:
             strict_pagi=False,
             max_jp_guru_per_hari=8,
             max_mapel_per_hari=5,
+            num_workers=num_workers,
+            log_progress=log_progress,
         )
         if success:
             return True, df_res, df_lap, "Selesai (Mode Fleksibel)"
@@ -498,8 +515,10 @@ class Scheduler:
             "Gagal menyusun jadwal. Mohon periksa jumlah slot jam KBM atau beban JP guru.",
         )
 
-    def generate(self, timeout=120):
+    def generate(self, timeout=120, num_workers=4, log_progress=False):
         success, df_hasil, df_laporan, _ = self.solve_with_fallback(
-            timeout_total=timeout
+            timeout_total=timeout,
+            num_workers=num_workers,
+            log_progress=log_progress,
         )
         return df_hasil, df_laporan
