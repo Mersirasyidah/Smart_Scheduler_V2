@@ -4,11 +4,10 @@ import pandas as pd
 import streamlit as st
 from database import get_all_data
 
-# Import runner & container milikmu
+# Import runner & container
 try:
     from main import SchedulerContainer, run_scheduler
 except ImportError:
-    # Fallback jika runner ada di file lokal yang sama / solver
     try:
         from solver import SchedulerContainer, run_scheduler
     except ImportError:
@@ -23,6 +22,10 @@ st.caption(
     "Optimasi pembuatan jadwal KBM sekolah menggunakan Google OR-Tools CP-SAT Solver."
 )
 
+# Inisialisasi session state untuk menyimpan hasil scheduler
+if "df_hasil" not in st.session_state:
+    st.session_state.df_hasil = None
+
 # ==========================================================
 # 1. INISIALISASI & PEMBACAAN DATA
 # ==========================================================
@@ -31,7 +34,6 @@ uploaded_file = st.sidebar.file_uploader(
     "Upload File Excel Master (Opsional)", type=["xlsx", "xls"]
 )
 
-# Variable penampung DataFrame
 df_guru = None
 df_mapel = None
 df_rombel = None
@@ -67,14 +69,17 @@ if uploaded_file is not None:
 
 # OPSI B: Jika Tidak Upload, Ambil Otomatis dari database.py
 if df_guru is None:
-    data_dict = get_all_data()
-    if data_dict:
-        df_guru = data_dict["guru"]
-        df_mapel = data_dict["mapel"]
-        df_rombel = data_dict["rombel"]
-        df_guru_mengajar = data_dict["mengajar"]
-        df_hari_jam = data_dict["slot"]
-        st.sidebar.info("ℹ️ Menggunakan Data Master Lokal.")
+    try:
+        data_dict = get_all_data()
+        if data_dict:
+            df_guru = data_dict.get("guru")
+            df_mapel = data_dict.get("mapel")
+            df_rombel = data_dict.get("rombel")
+            df_guru_mengajar = data_dict.get("mengajar")
+            df_hari_jam = data_dict.get("slot")
+            st.sidebar.info("ℹ️ Menggunakan Data Master Lokal.")
+    except Exception as e:
+        st.sidebar.warning(f"⚠️ Gagal mengambil data lokal: {e}")
 
 timeout_user = st.sidebar.slider(
     "Total Durasi Timeout Solver (Detik)", 30, 300, 120, 30
@@ -108,74 +113,96 @@ if not data_ready:
 st.success("🎉 Data Master Terdeteksi Lengkap & Siap Digunakan!")
 
 if st.button("🚀 Proses Penjadwalan Otomatis", type="primary"):
-    with st.spinner(
-        "Sedang memproses dan mengoptimasi jadwal pembelajaran..."
-    ):
+    with st.spinner("Sedang memproses dan mengoptimasi jadwal pembelajaran..."):
+        try:
+            res = run_scheduler(
+                df_guru=df_guru,
+                df_mapel=df_mapel,
+                df_rombel=df_rombel,
+                df_guru_mengajar=df_guru_mengajar,
+                df_hari_jam=df_hari_jam,
+                timeout=timeout_user,
+            )
+            # Menangani pengembalian tuple atau dataframe langsung
+            if isinstance(res, tuple):
+                st.session_state.df_hasil = res[0]
+            else:
+                st.session_state.df_hasil = res
+        except Exception as e:
+            st.error(f"❌ Error saat menjalankan solver: {e}")
+            st.session_state.df_hasil = None
 
-        # Memanggil fungsi run_scheduler milikmu
-        df_hasil = run_scheduler(
-            df_guru=df_guru,
-            df_mapel=df_mapel,
-            df_rombel=df_rombel,
-            df_guru_mengajar=df_guru_mengajar,
-            df_hari_jam=df_hari_jam,
-            timeout=timeout_user,
+# ==========================================================
+# 4. TAMPILAN HASIL PENJADWALAN
+# ==========================================================
+df_hasil = st.session_state.df_hasil
+
+if df_hasil is not None and not df_hasil.empty:
+    st.success("🎉 **BERHASIL!** AI Solver menemukan jadwal optimal.")
+
+    # Deteksi Nama Kolom secara Dinamis
+    col_rombel = "ID_Rombel" if "ID_Rombel" in df_hasil.columns else "Kelas"
+    col_guru = (
+        "Nama_Guru"
+        if "Nama_Guru" in df_hasil.columns
+        else ("Nama Guru" if "Nama Guru" in df_hasil.columns else "ID_Guru")
+    )
+    col_mapel = (
+        "Nama_Mapel"
+        if "Nama_Mapel" in df_hasil.columns
+        else ("Nama Mapel" if "Nama Mapel" in df_hasil.columns else "ID_Mapel")
+    )
+    col_jam = (
+        "Jam_Ke"
+        if "Jam_Ke" in df_hasil.columns
+        else ("Jam" if "Jam" in df_hasil.columns else "Jam_Ke")
+    )
+
+    # Gabungkan Guru + Mapel untuk isi cell matriks
+    df_hasil_display = df_hasil.copy()
+    df_hasil_display["Guru_Mapel"] = (
+        df_hasil_display[col_guru].astype(str)
+        + "\n("
+        + df_hasil_display[col_mapel].astype(str)
+        + ")"
+    )
+
+    # Pivot Matriks Rombel
+    pivot_rombel = df_hasil_display.pivot_table(
+        index=["Hari", col_jam],
+        columns=col_rombel,
+        values="Guru_Mapel",
+        aggfunc=lambda x: " / ".join(x),
+        observed=False,
+    ).fillna("-")
+
+    tab1, tab2 = st.tabs(["📊 Matriks Jadwal Rombel", "📝 Detail Tabel Jadwal"])
+
+    with tab1:
+        st.dataframe(pivot_rombel, use_container_width=True)
+
+    with tab2:
+        st.dataframe(
+            df_hasil_display.drop(columns=["Guru_Mapel"], errors="ignore"),
+            use_container_width=True,
         )
 
-        if not df_hasil.empty:
-            st.success("🎉 **BERHASIL!** AI Solver menemukan jadwal optimal.")
+    # File Download Excel Multi-Sheet
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_hasil_display.drop(columns=["Guru_Mapel"], errors="ignore").to_excel(
+            writer, sheet_name="Jadwal_Detail", index=False
+        )
+        pivot_rombel.to_excel(writer, sheet_name="Matriks_Kelas")
 
-            # Buat Tampilan Pivot Matriks Rombel
-            col_rombel = (
-                "ID_Rombel" if "ID_Rombel" in df_hasil.columns else "Kelas"
-            )
-            col_guru = "ID_Guru" if "ID_Guru" in df_hasil.columns else "Guru"
-            col_mapel = "ID_Mapel" if "ID_Mapel" in df_hasil.columns else "Mapel"
-
-            df_hasil["Guru_Mapel"] = (
-                df_hasil[col_guru].astype(str)
-                + " ("
-                + df_hasil[col_mapel].astype(str)
-                + ")"
-            )
-
-            pivot_rombel = df_hasil.pivot_table(
-                index=["Hari", "Jam_Ke"],
-                columns=col_rombel,
-                values="Guru_Mapel",
-                aggfunc=lambda x: "/".join(x),
-                observed=False,
-            ).fillna("-")
-
-            tab1, tab2 = st.tabs(
-                ["📊 Matriks Jadwal Rombel", "📝 Detail Tabel Jadwal"]
-            )
-
-            with tab1:
-                st.dataframe(pivot_rombel, use_container_width=True)
-
-            with tab2:
-                st.dataframe(
-                    df_hasil.drop(columns=["Guru_Mapel"], errors="ignore"),
-                    use_container_width=True,
-                )
-
-            # File Download Excel
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                df_hasil.drop(columns=["Guru_Mapel"], errors="ignore").to_excel(
-                    writer, sheet_name="Jadwal_Detail", index=False
-                )
-                pivot_rombel.to_excel(writer, sheet_name="Matriks_Kelas")
-
-            st.download_button(
-                label="📥 Download Hasil Jadwal Lengkap (.xlsx)",
-                data=output.getvalue(),
-                file_name="Hasil_Jadwal_Pelajaran.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        else:
-            st.error(
-                "❌ **Gagal menemukan solusi jadwal.** Cobalah menaikkan nilai Timeout di sidebar "
-                "atau cek kembali bentrokan jam mengajar di data Excel."
-            )
+    st.download_button(
+        label="📥 Download Hasil Jadwal Lengkap (.xlsx)",
+        data=output.getvalue(),
+        file_name="Hasil_Jadwal_Pelajaran.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+elif df_hasil is not None and df_hasil.empty:
+    st.error(
+        "❌ **Gagal menemukan solusi jadwal.** Cobalah menaikkan nilai Timeout di sidebar "
+        "atau cek kembali bentrokan/kelonggaran di data master."
+    )
