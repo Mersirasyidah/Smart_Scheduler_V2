@@ -6,7 +6,6 @@ class ConstraintManager:
         self.hari_jam_df = data["hari_jam"]
 
     def get_teacher_mgmp_days(self):
-        """Mendapatkan pemetaan hari libur/MGMP untuk setiap Guru."""
         mgmp_dict = {}
         for _, row in self.guru_df.iterrows():
             if pd.notna(row["Hari MGMP"]):
@@ -14,7 +13,6 @@ class ConstraintManager:
         return mgmp_dict
 
     def get_lesson_splits(self):
-        """Memproses kolom Pembagian (misal: '2,2,1') menjadi daftar durasi sesi."""
         assignments = []
         for idx, row in self.mengajar_df.iterrows():
             splits_str = str(row["Pembagian"])
@@ -33,3 +31,6 @@ class ConstraintManager:
                 "splits": splits
             })
         return assignments
+
+# Alias agar aman jika dipanggil dengan nama ConstraintBuilder
+ConstraintBuilder = ConstraintManager
