@@ -1,102 +1,115 @@
+import io
 import pandas as pd
 
 
 class ScheduleExporter:
 
-  # Daftar Rombel Lengkap 7A - 9E secara terurut
   ALL_ROMBEL = [
-      "7A",
-      "7B",
-      "7C",
-      "7D",
-      "7E",
-      "8A",
-      "8B",
-      "8C",
-      "8D",
-      "8E",
-      "9A",
-      "9B",
-      "9C",
-      "9D",
-      "9E",
+      '7A',
+      '7B',
+      '7C',
+      '7D',
+      '7E',
+      '8A',
+      '8B',
+      '8C',
+      '8D',
+      '8E',
+      '9A',
+      '9B',
+      '9C',
+      '9D',
+      '9E',
   ]
+  HARI_ORDER = ['Jumat', 'Kamis', 'Rabu', 'Selasa', 'Senin']
 
   @staticmethod
-  def format_timetable(
-      df_results, mapel_df=None, list_rombel=None, slot_df=None
-  ):
-    """Mengubah dataframe hasil solver menjadi Pivot Table / Matriks Jadwal
+  def export_to_excel(df_results, file_path='Jadwal_Pelajaran_Lengkap.xlsx'):
+    """Mengekspor hasil penentuan jadwal ke format Excel persis seperti 'Jadwal baru.xlsx'
 
-    Lengkap untuk semua Rombel (7A - 9E) dan seluruh Jam Pelajaran.
+    Sheet 1: 'Jadwal_Semua_Kelas' Sheet 2-16: 'Kelas_7A', 'Kelas_7B', ...,
+    'Kelas_9E'
     """
     if df_results is None or df_results.empty:
-      return pd.DataFrame()
+      raise ValueError('Dataframe hasil penjadwalan kosong.')
 
     df = df_results.copy()
 
-    # 1. Tentukan list rombel target
-    target_rombel = list_rombel if list_rombel else ScheduleExporter.ALL_ROMBEL
+    # Normalisasi Nama Kolom jika ada variasi nama dari solver
+    column_mapping = {
+        'Hari': 'Hari',
+        'Jam': 'Jam Ke',
+        'Jam_Ke': 'Jam Ke',
+        'Kelas': 'Kelas / Rombel',
+        'ID_Rombel': 'Kelas / Rombel',
+        'Rombel': 'Kelas / Rombel',
+        'Nama_Guru': 'Nama Guru',
+        'Guru': 'Nama Guru',
+        'Guru_Nama': 'Nama Guru',
+        'Mata_Pelajaran': 'Mata Pelajaran',
+        'Mapel': 'Mata Pelajaran',
+        'Nama_Mapel': 'Mata Pelajaran',
+    }
 
-    # 2. Gabungkan ID_Mapel dengan Nama_Mapel jika dataframe mapel diberikan
-    if mapel_df is not None and "ID_Mapel" in df.columns:
-      mapel_map = dict(
-          zip(
-              mapel_df["ID_Mapel"].astype(str).str.strip(),
-              mapel_df["Nama_Mapel"].astype(str).str.strip(),
-          )
-      )
-      df["Display_Mapel"] = df["ID_Mapel"].map(mapel_map).fillna(df["ID_Mapel"])
-    else:
-      df["Display_Mapel"] = df.get("ID_Mapel", df.get("Mapel", ""))
-
-    # Normalize Nama Kolom
-    col_hari = "Hari" if "Hari" in df.columns else "Hari"
-    col_jam = "Jam_Ke" if "Jam_Ke" in df.columns else "Jam"
-    col_rombel = "ID_Rombel" if "ID_Rombel" in df.columns else "Kelas"
-
-    # 3. Buat Pivot Table
-    pivot_df = df.pivot_table(
-        index=[col_hari, col_jam],
-        columns=col_rombel,
-        values="Display_Mapel",
-        aggfunc=lambda x: " / ".join(x),
+    df = df.rename(
+        columns={k: v for k, v in column_mapping.items() if k in df.columns}
     )
 
-    # 4. Pastikan SELURUH Rombel (7A - 9E) muncul sebagai kolom
-    pivot_df = pivot_df.reindex(columns=target_rombel, fill_value="-")
+    # Pastikan kolom utama tersedia
+    required_cols = [
+        'Hari',
+        'Jam Ke',
+        'Kelas / Rombel',
+        'Nama Guru',
+        'Mata Pelajaran',
+    ]
+    for col in required_cols:
+      if col not in df.columns:
+        df[col] = '-'
 
-    # 5. Urutkan hari sesuai standar pekan
-    urutan_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat"]
-    if col_hari in pivot_df.index.names:
-      current_levels = pivot_df.index.levels[0]
-      sorted_days = [h for h in urutan_hari if h in current_levels]
-      pivot_df = pivot_df.reindex(index=sorted_days, level=0)
+    # Filter dan susun urutan kolom Sheet 'Jadwal_Semua_Kelas'
+    df_semua = df[required_cols].copy()
 
-    return pivot_df.fillna("-")
+    output = io.BytesIO() if not isinstance(file_path, str) else file_path
 
-  @staticmethod
-  def export_to_excel(
-      df_results,
-      mapel_df=None,
-      file_path="jadwal_terbentuk.xlsx",
-      list_rombel=None,
-  ):
-    """Menyimpan jadwal ke file Excel dengan multi-sheet:
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+      # 1. Tulis Sheet 'Jadwal_Semua_Kelas'
+      df_semua.to_excel(writer, sheet_name='Jadwal_Semua_Kelas', index=False)
 
-    1. Jadwal_Matriks_Kelas (7A-9E) 2. Detail_Jadwal
-    """
-    target_rombel = list_rombel if list_rombel else ScheduleExporter.ALL_ROMBEL
-    pivot_matrix = ScheduleExporter.format_timetable(
-        df_results, mapel_df=mapel_df, list_rombel=target_rombel
-    )
+      # 2. Tulis Sheet untuk Setiap Kelas (Kelas_7A s.d. Kelas_9E)
+      rombel_list = sorted(df_semua['Kelas / Rombel'].unique())
+      # Menggunakan list lengkap rombel jika ada
+      target_rombels = [
+          r for r in ScheduleExporter.ALL_ROMBEL if r in rombel_list
+      ]
+      if not target_rombels:
+        target_rombels = rombel_list
 
-    with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
-      # Sheet 1: Matriks Jadwal Rombel Lengkap
-      if not pivot_matrix.empty:
-        pivot_matrix.to_excel(writer, sheet_name="Jadwal_Kelas_7A_9E")
+      for rombel in target_rombels:
+        df_kelas = df_semua[df_semua['Kelas / Rombel'] == rombel]
 
-      # Sheet 2: Raw Detail Schedule
-      df_results.to_excel(writer, sheet_name="Detail_Jadwal", index=False)
+        # Buat pivot matriks: Index = Jam Ke, Columns = Hari, Values = Nama Guru
+        pivot_kelas = df_kelas.pivot_table(
+            index='Jam Ke',
+            columns='Hari',
+            values='Nama Guru',
+            aggfunc='first',
+        )
+
+        # Pastikan kolom hari lengkap dan sesuai urutan
+        days_present = [
+            h for h in ScheduleExporter.HARI_ORDER if h in pivot_kelas.columns
+        ]
+        pivot_kelas = pivot_kelas.reindex(columns=days_present)
+
+        # Reindex Jam Ke 1 s.d. 9
+        pivot_kelas = pivot_kelas.reindex(range(1, 10))
+
+        sheet_name = f'Kelas_{rombel}'
+        pivot_kelas.to_excel(writer, sheet_name=sheet_name)
+
+    if not isinstance(file_path, str):
+      output.seek(0)
+      return output
 
     return file_path
