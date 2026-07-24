@@ -78,10 +78,17 @@ class SchedulerSolver:
             if kode == "M11" or "JASMANI" in str(row["Nama_Mapel"]).upper():
                 self.mapel_pjok.add(str(row["ID_Mapel"]))
 
+        # Status Guru (GTT vs Non-GTT) & Mapping Hari MGMP
+        self.guru_gtt_set = set()
+        if "Status" in self.guru.columns:
+            for _, row in self.guru.iterrows():
+                if "GTT" in str(row["Status"]).upper():
+                    self.guru_gtt_set.add(str(row["ID_Guru"]))
+
         self.variables = {}
         self.penalties = []
 
-    def run_solver(self, timeout_seconds=120):
+    def run_solver(self, timeout_seconds=120, max_jam_mgmp=4):
         # Inisialisasi Variabel Utama
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
@@ -104,6 +111,7 @@ class SchedulerSolver:
             t_id = t["id_tugas"]
             mapel = t["mapel"]
             rombel = t["rombel"]
+            guru = t["guru"]
 
             # Total jam mengajar harus sama dengan JP
             self.model.Add(
@@ -125,7 +133,39 @@ class SchedulerSolver:
                         if jam > 6:
                             self.model.Add(self.variables[(t_id, hari, jam)] == 0)
 
-        # Maksimal 5 Mapel per Hari per Rombel (Diubah dari 4 agar tidak saling mengunci/infeasible)
+        # -------------------------------------------------------------
+        # CONSTRAINT BARU: ATURAN HARI MGMP
+        # -------------------------------------------------------------
+        # Cek apakah ada kolom Hari_MGMP di sheet Mapel/Guru atau parameter hari MGMP
+        # Menyesuaikan mapping hari MGMP dari dataframe Mapel jika ada kolom 'Hari_MGMP'
+        mapel_mgmp_dict = {}
+        if "Hari_MGMP" in self.mapel.columns:
+            for _, row in self.mapel.iterrows():
+                if pd.notna(row["Hari_MGMP"]):
+                    mapel_mgmp_dict[str(row["ID_Mapel"])] = str(row["Hari_MGMP"]).strip()
+
+        for t in self.tugas_mengajar:
+            t_id = t["id_tugas"]
+            guru = t["guru"]
+            mapel = t["mapel"]
+            
+            hari_mgmp = mapel_mgmp_dict.get(mapel)
+            
+            if hari_mgmp:
+                # Cari penulisan nama hari yang cocok di slot jam
+                hari_mgmp_match = next((h for h in self.list_hari if h.strip().lower() == hari_mgmp.lower()), None)
+                
+                if hari_mgmp_match:
+                    if guru in self.guru_gtt_set:
+                        # GTT Libur total di hari MGMP mapelnya
+                        self.model.Add(tugas_hari_aktif[(t_id, hari_mgmp_match)] == 0)
+                    else:
+                        # Guru Non-GTT hanya boleh mengajar sampai jam ke-max_jam_mgmp (misal jam ke-4)
+                        for jam in self.jam_per_hari[hari_mgmp_match]:
+                            if jam > max_jam_mgmp:
+                                self.model.Add(self.variables[(t_id, hari_mgmp_match, jam)] == 0)
+
+        # Maksimal 5 Mapel per Hari per Rombel
         for rombel in self.list_rombel:
             for hari in self.list_hari:
                 mapel_aktif_hari = []
@@ -147,21 +187,21 @@ class SchedulerSolver:
                     for hari in self.list_hari:
                         self.model.Add(sum(tugas_hari_aktif[(t_id, hari)] for t_id in tugas_sama) <= 1)
 
-        # Konflik Rombel (1 Rombel max 1 mapel di jam yang sama)
+        # Konflik Rombel
         for rombel in self.list_rombel:
             tugas_rombel = [t["id_tugas"] for t in self.tugas_mengajar if t["rombel"] == rombel]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_rombel) <= 1)
 
-        # Konflik Guru (1 Guru max 1 rombel di jam yang sama)
+        # Konflik Guru
         for guru in self.list_guru:
             tugas_guru = [t["id_tugas"] for t in self.tugas_mengajar if t["guru"] == guru]
             for hari in self.list_hari:
                 for jam in self.jam_per_hari[hari]:
                     self.model.Add(sum(self.variables[(t_id, hari, jam)] for t_id in tugas_guru) <= 1)
 
-        # Blok Jam Berurutan (Sliding Window dengan proteksi boundary)
+        # Blok Jam Berurutan (Sliding Window)
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             target_jp = t["jp"]
@@ -179,7 +219,6 @@ class SchedulerSolver:
                                 self.model.Add(self.variables[(t_id, hari, jam_hari[i + offset])] == 1).OnlyEnforceIf(s_var)
                         self.model.Add(sum(start_vars) == tugas_hari_aktif[(t_id, hari)])
                     else:
-                        # Jika slot jam pembelajaran di hari tersebut kurang dari jumlah JP blok
                         self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
 
         # 2. SOFT CONSTRAINTS (Penalti PJOK siang hari)
