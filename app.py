@@ -1,7 +1,7 @@
 import io
 import pandas as pd
-from solver import SchedulerSolver
 import streamlit as st
+from solver import SchedulerSolver
 
 st.set_page_config(
     page_title="Sistem Penjadwalan Sekolah", page_icon="📅", layout="wide"
@@ -13,7 +13,7 @@ st.markdown(
 )
 
 
-# Class Mockup Data Wrapper (Menyesuaikan input Streamlit)
+# Class Data Wrapper
 class SchedulerData:
 
     def __init__(self, guru_df, rombel_df, mengajar_df, mapel_df, slot_df):
@@ -31,7 +31,7 @@ uploaded_file = st.sidebar.file_uploader(
 )
 
 timeout_user = st.sidebar.slider(
-    "Durasi Timeout Solver (Detik)", 30, 300, 120, 30
+    "Total Durasi Timeout Solver (Detik)", 30, 300, 120, 30
 )
 
 if uploaded_file:
@@ -48,10 +48,9 @@ if uploaded_file:
         )
         st.success("✅ Seluruh sheet Excel berhasil dibaca.")
 
-        if st.button("🚀 Process Penjadwalan Otomatis", type="primary"):
-            st.info("Memulai proses penjadwalan bertahap...")
-
-            # DUA SKENARIO UTAMA BERTINGKAT
+        if st.button("🚀 Proses Penjadwalan Otomatis", type="primary"):
+            
+            # KUMPULAN SKENARIO BERTINGKAT
             skenario_list = [
                 {
                     "desc": "Skenario 1 (Ideal): Max 6 JP/Hari | MGMP Non-GTT Max Jam Ke-4",
@@ -78,67 +77,88 @@ if uploaded_file:
             timeout_per_skenario = max(10, timeout_user // len(skenario_list))
             berhasil = False
 
-            for i, skenario in enumerate(skenario_list, start=1):
-                st.write(
-                    f"⏳ **Mencoba {skenario['desc']}** (Timeout: {timeout_per_skenario}d)..."
-                )
-
-                solver = SchedulerSolver(scheduler_data)
-                is_success = solver.run_solver(
-                    timeout_seconds=timeout_per_skenario,
-                    max_jam_mgmp_nongtt=skenario["max_mgmp"],
-                    max_jp_per_hari=skenario["max_jp"],
-                )
-
-                if is_success:
-                    st.success(f"🎉 **BERHASIL!** Solusi ditemukan di Skenario {i}.")
-                    df_hasil = solver.extract_results()
-                    df_laporan = solver.generate_teacher_report(df_hasil)
-
-                    # TAMPILKAN HASIL
-                    tab1, tab2, tab3 = st.tabs(
-                        [
-                            "📊 Matriks Jadwal Rombel",
-                            "📝 Detail Tabel",
-                            "👨‍🏫 Rekap Guru",
-                        ]
+            # Tampilkan spinner loading saat solver berjalan
+            with st.spinner("Sedang memproses dan mengoptimasi jadwal..."):
+                for i, skenario in enumerate(skenario_list, start=1):
+                    st.write(
+                        f"⏳ **Mencoba {skenario['desc']}** (Timeout: {timeout_per_skenario}s)..."
                     )
 
-                    with tab1:
+                    solver = SchedulerSolver(scheduler_data)
+                    is_success = solver.run_solver(
+                        timeout_seconds=timeout_per_skenario,
+                        max_jam_mgmp_nongtt=skenario["max_mgmp"],
+                        max_jp_per_hari=skenario["max_jp"],
+                    )
+
+                    if is_success:
+                        st.success(f"🎉 **BERHASIL!** Solusi ditemukan pada Skenario {i}.")
+                        df_hasil = solver.extract_results()
+                        df_laporan = solver.generate_teacher_report(df_hasil)
+
+                        # PERBAIKAN 1: Bikin Urutan Hari Sesuai Kalender Sekolah
+                        urutan_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]
+                        if "Hari" in df_hasil.columns:
+                            df_hasil["Hari"] = pd.Categorical(
+                                df_hasil["Hari"], categories=urutan_hari, ordered=True
+                            )
+                            df_hasil = df_hasil.sort_values(
+                                by=["Hari", "ID_Rombel", "Jam_Ke"]
+                            ).reset_index(drop=True)
+
+                        # PERBAIKAN 2: Gabungkan Guru & Mapel untuk Matriks Jadwal
+                        df_hasil["Guru_Mapel"] = (
+                            df_hasil["ID_Guru"].astype(str) + " (" + df_hasil["ID_Mapel"].astype(str) + ")"
+                        )
+
+                        # PIVOT TABLE MATRIKS
                         pivot_rombel = df_hasil.pivot_table(
                             index=["Hari", "Jam_Ke"],
                             columns="ID_Rombel",
-                            values="ID_Guru",
+                            values="Guru_Mapel",
                             aggfunc=lambda x: "/".join(x),
                         ).fillna("-")
-                        st.dataframe(pivot_rombel, use_container_width=True)
 
-                    with tab2:
-                        st.dataframe(df_hasil, use_container_width=True)
-
-                    with tab3:
-                        st.dataframe(df_laporan, use_container_width=True)
-
-                    # TOMBOL DOWNLOAD EXCEL
-                    output = io.BytesIO()
-                    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                        df_hasil.to_excel(
-                            writer, sheet_name="Jadwal_Detail", index=False
-                        )
-                        pivot_rombel.to_excel(writer, sheet_name="Matriks_Kelas")
-                        df_laporan.to_excel(
-                            writer, sheet_name="Rekap_Beban_Guru", index=False
+                        # TAMPILKAN HASIL PADA TAB
+                        tab1, tab2, tab3 = st.tabs(
+                            [
+                                "📊 Matriks Jadwal Rombel",
+                                "📝 Detail Tabel",
+                                "👨‍🏫 Rekap Guru",
+                            ]
                         )
 
-                    st.download_button(
-                        label="📥 Download Hasil Jadwal Lengkap (.xlsx)",
-                        data=output.getvalue(),
-                        file_name="Hasil_Jadwal_Pelajaran.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
+                        with tab1:
+                            st.dataframe(pivot_rombel, use_container_width=True)
 
-                    berhasil = True
-                    break
+                        with tab2:
+                            # Hapus kolom pembantu sebelum ditampilkan
+                            df_show = df_hasil.drop(columns=["Guru_Mapel"], errors="ignore")
+                            st.dataframe(df_show, use_container_width=True)
+
+                        with tab3:
+                            st.dataframe(df_laporan, use_container_width=True)
+
+                        # EXPORT DOWNLOAD EXCEL
+                        output = io.BytesIO()
+                        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                            df_hasil.drop(columns=["Guru_Mapel"], errors="ignore").to_excel(
+                                writer, sheet_name="Jadwal_Detail", index=False
+                            )
+                            pivot_rombel.to_excel(writer, sheet_name="Matriks_Kelas")
+                            df_laporan.to_excel(
+                                writer, sheet_name="Rekap_Beban_Guru", index=False
+                            )
+
+                        st.download_button(
+                            label="📥 Download Hasil Jadwal Lengkap (.xlsx)",
+                            data=output.getvalue(),
+                            file_name="Hasil_Jadwal_Pelajaran.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        )
+
+                        berhasil = True
+                        break
 
             if not berhasil:
                 st.error(
