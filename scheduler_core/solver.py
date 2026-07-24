@@ -169,12 +169,11 @@ class SchedulerSolver:
         max_jp_per_hari=6,
         log_search=False,
     ):
-        # Reset Model untuk Eksekusi Ulang
         self.model = cp_model.CpModel()
         self.variables = {}
         self.penalties = []
 
-        # 1. Inisialisasi Variabel
+        # 1. Inisialisasi Variabel Utama
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             for hari in self.list_hari:
@@ -183,6 +182,7 @@ class SchedulerSolver:
                         self.model.NewBoolVar(f"t_{t_id}_{hari}_{jam}")
                     )
 
+        # Indicator Hari Aktif Per Tugas
         tugas_hari_aktif = {}
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
@@ -203,14 +203,14 @@ class SchedulerSolver:
             (h for h in self.list_hari if h.lower() == "kamis"), None
         )
 
-        # 2. Aturan Dasar & Preferensi Mapel
+        # 2. Aturan Dasar & Preferensi Khusus
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             guru = t["guru"]
             mapel = t["mapel"]
             rombel = t["rombel"]
 
-            # Pemenuhan Total JP Per Tugas
+            # Total JP Per Tugas harus terpenuhi tepat sejumlah JP-nya
             self.model.Add(
                 sum(
                     self.variables[(t_id, hari, jam)]
@@ -220,26 +220,26 @@ class SchedulerSolver:
                 == t["jp"]
             )
 
-            # 1 Hari per Blok Tugas
+            # 1 Blok Tugas HANYA boleh bertempat di 1 HARI saja
             self.model.Add(
                 sum(tugas_hari_aktif[(t_id, hari)] for hari in self.list_hari)
                 == 1
             )
 
-            # Penalti Lunak Agama M01 (Preferensi Kamis)
+            # Penalti Preferensi Agama M01 di Hari Kamis
             if mapel == "M01" and kamis_key:
                 if rombel in ["7A", "8A", "8C", "9A"]:
                     self.penalties.append(
                         (1 - tugas_hari_aktif[(t_id, kamis_key)]) * 500
                     )
 
-            # Penalti Lunak Guru G32
+            # Penalti Preferensi Guru G32 di Hari Kamis
             if guru == "G32" and kamis_key and rombel == "8B":
                 self.penalties.append(
                     (1 - tugas_hari_aktif[(t_id, kamis_key)]) * 500
                 )
 
-            # Batasan PJOK (Maksimal Jam ke-6)
+            # Batasan PJOK (Max Jam ke-6)
             if mapel in self.mapel_pjok:
                 for hari in self.list_hari:
                     for jam in self.jam_per_hari.get(hari, []):
@@ -249,7 +249,7 @@ class SchedulerSolver:
                                     self.variables[(t_id, hari, jam)] == 0
                                 )
 
-        # 3. ATURAN HARI MGMP (GTT vs Non-GTT / Reguler)
+        # 3. Restriksi Hari MGMP / Libur Guru
         for guru, hari_libur in self.guru_mgmp_dict.items():
             target_hari = next(
                 (h for h in self.list_hari if h.lower() == hari_libur.lower()),
@@ -267,13 +267,13 @@ class SchedulerSolver:
                     for jam in self.jam_per_hari.get(target_hari, []):
                         if (t_id, target_hari, jam) in self.variables:
                             if is_gtt:
-                                # Guru GTT: DILARANG MENGAJAR SAMA SEKALI (0 JP / Libur Full)
+                                # GTT: Dilarang mengajar sama sekali di hari MGMP
                                 self.model.Add(
                                     self.variables[(t_id, target_hari, jam)]
                                     == 0
                                 )
                             else:
-                                # Guru Reguler: Boleh mengajar HANYA sampai max_jam_mgmp_nongtt
+                                # Non-GTT: Mengajar hanya boleh sampai batas max_jam_mgmp_nongtt
                                 if jam > max_jam_mgmp_nongtt:
                                     self.model.Add(
                                         self.variables[
@@ -334,40 +334,51 @@ class SchedulerSolver:
                         <= 1
                     )
 
-        # 7. Blok Jam Berurutan (Sliding Window)
+        # 7. BLOK JAM BERURUTAN EXACT (Sliding Window Fix)
         for t in self.tugas_mengajar:
             t_id = t["id_tugas"]
             target_jp = t["jp"]
-            if target_jp > 1:
-                for hari in self.list_hari:
-                    jam_hari = self.jam_per_hari.get(hari, [])
-                    num_windows = len(jam_hari) - target_jp + 1
 
-                    if num_windows > 0:
-                        start_vars = []
-                        for i in range(num_windows):
-                            s_var = self.model.NewBoolVar(
-                                f"start_{t_id}_{hari}_{jam_hari[i]}"
-                            )
-                            start_vars.append(s_var)
-                            for offset in range(target_jp):
-                                j_target = jam_hari[i + offset]
-                                if (t_id, hari, j_target) in self.variables:
-                                    self.model.Add(
-                                        self.variables[(t_id, hari, j_target)]
-                                        == 1
-                                    ).OnlyEnforceIf(s_var)
-                        self.model.Add(
-                            sum(start_vars) == tugas_hari_aktif[(t_id, hari)]
+            for hari in self.list_hari:
+                jam_hari = self.jam_per_hari.get(hari, [])
+                num_windows = len(jam_hari) - target_jp + 1
+
+                if num_windows > 0 and target_jp > 1:
+                    start_vars = []
+                    for i in range(num_windows):
+                        s_var = self.model.NewBoolVar(
+                            f"start_{t_id}_{hari}_{jam_hari[i]}"
                         )
-                    else:
-                        self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
+                        start_vars.append(s_var)
 
-        # Penalti Total
+                        valid_jams_in_window = set(
+                            jam_hari[i : i + target_jp]
+                        )
+
+                        for jam in jam_hari:
+                            if (t_id, hari, jam) in self.variables:
+                                if jam in valid_jams_in_window:
+                                    self.model.Add(
+                                        self.variables[(t_id, hari, jam)] == 1
+                                    ).OnlyEnforceIf(s_var)
+                                else:
+                                    self.model.Add(
+                                        self.variables[(t_id, hari, jam)] == 0
+                                    ).OnlyEnforceIf(s_var)
+
+                    self.model.Add(
+                        sum(start_vars) == tugas_hari_aktif[(t_id, hari)]
+                    )
+                elif target_jp == 1:
+                    pass
+                else:
+                    self.model.Add(tugas_hari_aktif[(t_id, hari)] == 0)
+
+        # Optimasi Minimasi Penalti
         if self.penalties:
             self.model.Minimize(sum(self.penalties))
 
-        # Eksekusi Solver
+        # 8. Eksekusi Solver CP-SAT
         self.solver = cp_model.CpSolver()
         self.solver.parameters.max_time_in_seconds = float(timeout_seconds)
         self.solver.parameters.num_search_workers = 4
