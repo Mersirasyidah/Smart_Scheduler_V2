@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import streamlit as st
 
-# Path absolut agar tidak nyasar
+# Menggunakan absolute path agar lokasi file pasti
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATABASE = os.path.join(BASE_DIR, "data", "database_scheduler.xlsx")
 
@@ -16,24 +16,21 @@ def load_database():
         excel = pd.ExcelFile(DATABASE, engine="openpyxl")
         data = {}
         for sheet in excel.sheet_names:
-            # Bersihkan nama sheet dari spasi liar
             clean_name = str(sheet).strip()
             data[clean_name] = pd.read_excel(
                 DATABASE, sheet_name=sheet, engine="openpyxl"
             )
         return data
     except Exception as e:
-        st.error(f"Error membaca database: {e}")
         return {}
 
 
 def get_all_data():
-    """Mengambil semua sheet sekaligus dengan pencarian nama fleksibel."""
+    """Mengambil semua sheet dengan toleransi variasi nama kolom/sheet."""
     db = load_database()
     if not db:
         return None
 
-    # Fungsi pencari sheet (case-insensitive & toleran spasi)
     def find_sheet(possible_names):
         for name in db.keys():
             if name.lower().strip() in [p.lower() for p in possible_names]:
@@ -46,7 +43,7 @@ def get_all_data():
     mapel = find_sheet(["Mapel"])
     slot = find_sheet(["Slot", "Hari_Jam", "Jadwal_Slot"])
 
-    # Validasi jika ada sheet utama yang kosong
+    # Jika sheet utama kosong, anggap database belum siap
     if guru.empty or mengajar.empty or slot.empty:
         return None
 
