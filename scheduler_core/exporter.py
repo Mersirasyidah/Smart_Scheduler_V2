@@ -2,51 +2,117 @@
 import io
 import pandas as pd
 
+
 class ScheduleExporter:
+
     def __init__(self, df_hasil, db):
-        self.df_hasil = df_hasil
-        self.db = db
-        self.guru = db["Guru"]
-        self.rombel = db["Rombel"]
-        self.mapel = db["Mapel"]
+        self.df_hasil = df_hasil.copy()
+
+        # Konversi db ke dict DataFrame jika berupa objek DataLoader/pustaka
+        if isinstance(db, dict):
+            self.guru = db["Guru"].copy()
+            self.rombel = db["Rombel"].copy()
+            self.mapel = db["Mapel"].copy()
+        else:
+            self.guru = db.guru.copy()
+            self.rombel = db.rombel.copy()
+            self.mapel = db.mapel.copy()
+
+        # Sanitasi nama kolom database
+        for df in [self.guru, self.rombel, self.mapel]:
+            df.columns = [str(c).strip().replace(" ", "_") for c in df.columns]
 
     def generate_excel(self):
-        """Membuat file Excel di memori (BytesIO) agar bisa langsung diunduh lewat Streamlit"""
+        """Membuat file Excel di memori (BytesIO) untuk diunduh via Streamlit"""
         output = io.BytesIO()
-        
-        # Gabungkan data ID dengan nama asli agar jadwal mudah dibaca manusia
-        df_rich = self.df_hasil.merge(self.guru, on="ID_Guru", how="left")
-        df_rich = df_rich.merge(self.rombel, on="ID_Rombel", how="left")
-        df_rich = df_rich.merge(self.mapel, on="ID_Mapel", how="left")
-        
-        # Pilih kolom yang relevan untuk lembar utama
-        df_cetak = df_rich[[
-            "Hari", "Jam_Ke", "Nama_Rombel", "Nama_Guru", "Nama_Mapel"
-        ]].copy()
-        df_cetak.columns = ["Hari", "Jam Ke", "Kelas / Rombel", "Nama Guru", "Mata Pelajaran"]
 
-        # Tulis ke file Excel menggunakan openpyxl engine
-        with pd.ExcelWriter(output, engine="openpyxl") as writer:
-            # Sheet 1: Jadwal Vertikal (Semua Kelas)
-            df_cetak.to_excel(writer, sheet_name="Jadwal_Semua_Kelas", index=False)
-            
-            # Sheet 2: Format Matriks (Jadwal per Rombel agar mudah dibaca per kelas)
-            matriks_list = []
-            for kelas in df_cetak["Kelas / Rombel"].unique():
-                df_kelas = df_cetak[df_cetak["Kelas / Rombel"] == kelas]
-                pivot_kelas = df_kelas.pivot(
-                    index="Jam Ke", 
-                    columns="Hari", 
-                    values="Nama Guru"
+        if self.df_hasil.empty:
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                pd.DataFrame({"Pesan": ["Data jadwal kosong"]}).to_excel(
+                    writer, sheet_name="Jadwal", index=False
                 )
-                # Tambahkan penanda nama kelas di dalam sheet nanti
-                matriks_list.append((kelas, pivot_kelas))
-            
-            # Tulis matriks kelas ke sheet terpisah demi kemudahan pembacaan
-            for kelas, pivot_df in matriks_list:
-                # Batasi panjang nama sheet maksimal 30 karakter agar tidak error di Excel
-                sheet_title = f"Kelas_{str(kelas)[:20]}"
-                pivot_df.to_excel(writer, sheet_name=sheet_title)
+            return output.getvalue()
 
-        # Kembalikan file binary Excel
+        # 1. Menyesuaikan nama kolom ID Rombel pada sheet Rombel
+        rombel_df = self.rombel.copy()
+        if "Kelas" in rombel_df.columns and "ID_Rombel" not in rombel_df.columns:
+            rombel_df["ID_Rombel"] = rombel_df["Kelas"]
+
+        # 2. Merge data ID dengan detail lengkap dari sheet Guru, Rombel, dan Mapel
+        df_rich = self.df_hasil.merge(self.guru, on="ID_Guru", how="left")
+        df_rich = df_rich.merge(rombel_df, on="ID_Rombel", how="left")
+        df_rich = df_rich.merge(self.mapel, on="ID_Mapel", how="left")
+
+        # Deteksi otomatis nama kolom kelas/rombel
+        col_kelas = (
+            "Kelas"
+            if "Kelas" in df_rich.columns
+            else (
+                "Nama_Rombel"
+                if "Nama_Rombel" in df_rich.columns
+                else "ID_Rombel"
+            )
+        )
+        col_guru = (
+            "Nama_Guru" if "Nama_Guru" in df_rich.columns else "ID_Guru"
+        )
+        col_mapel = (
+            "Nama_Mapel" if "Nama_Mapel" in df_rich.columns else "ID_Mapel"
+        )
+
+        # Buat kolom gabungan untuk isi sel matriks/pivot: "Nama Mapel (Nama Guru)"
+        df_rich["Mapel_Guru"] = (
+            df_rich[col_mapel].fillna("-").astype(str)
+            + "\n("
+            + df_rich[col_guru].fillna("-").astype(str)
+            + ")"
+        )
+
+        # DataFrame cetak utama (Bentuk Tabel Vertikal)
+        df_cetak = df_rich[
+            ["Hari", "Jam_Ke", col_kelas, col_guru, col_mapel]
+        ].copy()
+        df_cetak.columns = [
+            "Hari",
+            "Jam Ke",
+            "Kelas / Rombel",
+            "Nama Guru",
+            "Mata Pelajaran",
+        ]
+
+        # Urutkan berdasarkan Hari & Jam
+        urutan_hari = ["Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"]
+        df_cetak["Hari_Num"] = df_cetak["Hari"].map(
+            lambda x: (
+                urutan_hari.index(x) if x in urutan_hari else 99
+            )
+        )
+        df_cetak = df_cetak.sort_values(
+            by=["Hari_Num", "Kelas / Rombel", "Jam Ke"]
+        ).drop(columns=["Hari_Num"])
+
+        # 3. Tulis ke Excel (Menggunakan openpyxl)
+        with pd.ExcelWriter(output, engine="openpyxl") as writer:
+            # Sheet 1: Jadwal Vertikal / Master
+            df_cetak.to_excel(
+                writer, sheet_name="Jadwal_Semua_Kelas", index=False
+            )
+
+            # Sheet 2: Matriks Per Kelas (Pivot)
+            for kelas in df_rich[col_kelas].unique():
+                df_k = df_rich[df_rich[col_kelas] == kelas]
+
+                pivot_k = df_k.pivot(
+                    index="Jam_Ke", columns="Hari", values="Mapel_Guru"
+                ).fillna("-")
+
+                # Atur ulang urutan kolom Hari pada Pivot jika ada
+                existing_days = [
+                    h for h in urutan_hari if h in pivot_k.columns
+                ]
+                pivot_k = pivot_k[existing_days]
+
+                sheet_title = f"Kelas_{str(kelas)[:20]}"
+                pivot_k.to_excel(writer, sheet_name=sheet_title)
+
         return output.getvalue()
