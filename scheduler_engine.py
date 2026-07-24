@@ -2,11 +2,15 @@ import openpyxl
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-# 1. Inisialisasi Workbook
+# ==========================================
+# 1. INISIALISASI WORKBOOK
+# ==========================================
 wb = openpyxl.Workbook()
-wb.remove(wb.active)  # Hapus sheet bawaan
+wb.remove(wb.active)  # Hapus sheet bawaan (Sheet default)
 
-# 2. Data Pemetaan Guru & Mapel per Kelas
+# ==========================================
+# 2. PEMETAAN GURU & MAPEL PER KELAS
+# ==========================================
 teaching_assignment = {
     '7A': {
         'IPA': 'Purwanto, S.Pd.',
@@ -205,7 +209,9 @@ teaching_assignment = {
     },
 }
 
-# 3. Matriks Matapelajaran Mingguan
+# ==========================================
+# 3. MATRIKS MATA PELAJARAN MINGGUAN
+# ==========================================
 schedule_7 = {
     'Senin': {
         1: 'Matematika',
@@ -381,7 +387,9 @@ for c in ['9A', '9B', '9C', '9D', '9E']:
 
 classes = list(teaching_assignment.keys())
 
-# 4. Format Styles
+# ==========================================
+# 4. DEKORASI & GAYA STYLE EXCEL
+# ==========================================
 navy_fill = PatternFill(
     start_color='1F497D', end_color='1F497D', fill_type='solid'
 )
@@ -412,7 +420,7 @@ thin_border = Border(
 align_center = Alignment(horizontal='center', vertical='center', wrap_text=True)
 align_left = Alignment(horizontal='left', vertical='center')
 
-# Slot Waktu
+# Slot Waktu Pelajaran
 time_slots = [
     (
         'Senin',
@@ -497,7 +505,9 @@ time_slots = [
     ),
 ]
 
-# 5. Buat Sheet Master (Jadwal_Semua_Kelas)
+# ==========================================
+# 5. BUAT SHEET MASTER (Jadwal_Semua_Kelas)
+# ==========================================
 ws_master = wb.create_sheet(title='Jadwal_Semua_Kelas')
 ws_master.merge_cells('A1:Q1')
 ws_master['A1'] = 'JADWAL PELAJARAN SMP - SEMESTER GENAP'
@@ -567,7 +577,9 @@ for day, slots in time_slots:
       end_column=1,
   )
 
-# 6. Buat Sheet Per Kelas (Kelas_7A - Kelas_9E)
+# ==========================================
+# 6. BUAT SHEET INDIVIDUAL (Kelas_7A - 9E)
+# ==========================================
 for cls in classes:
   ws_cls = wb.create_sheet(title=f'Kelas_{cls}')
   ws_cls.merge_cells('A1:E1')
@@ -612,7 +624,9 @@ for cls in classes:
         start_row=day_start, start_column=1, end_row=row_c - 1, end_column=1
     )
 
-# 7. Penyesuaian Lebar Kolom
+# ==========================================
+# 7. PENYESUAIAN LEBAR KOLOM & GRIDLINES
+# ==========================================
 for ws in wb.worksheets:
   ws.views.sheetView[0].showGridLines = True
   for col in ws.columns:
@@ -625,6 +639,9 @@ for ws in wb.worksheets:
     col_letter = get_column_letter(col[0].column)
     ws.column_dimensions[col_letter].width = max(max_len + 3, 12)
 
-# 8. Simpan File
-wb.save('database_scheduler.xlsx')
-print('Jadwal berhasil dibuat dan disimpan sebagai database_scheduler.xlsx!')
+# ==========================================
+# 8. SIMPAN FILE EXCEL
+# ==========================================
+output_filename = 'database_scheduler.xlsx'
+wb.save(output_filename)
+print(f'Selesai! Berhasil membuat file Excel jadwal: {output_filename}')
