@@ -2,7 +2,7 @@ import pandas as pd
 from ortools.sat.python import cp_model
 
 
-class Scheduler:
+class SchedulerSolver:
 
     def __init__(self, guru_df, rombel_df, mengajar_df, mapel_df, slot_df):
         self.guru_df = guru_df.copy() if guru_df is not None else pd.DataFrame()
@@ -233,10 +233,8 @@ class Scheduler:
                 for idx_j, j in enumerate(j_in_h):
                     S[(s_id, h, j)] = model.NewBoolVar(f"s_{s_id}_{h}_{j}")
 
-                    # PERBAIKAN: Memastikan blok jam berurutan secara fisik berdasarkan index slot
                     if idx_j + dur <= len(j_in_h):
                         block_j = j_in_h[idx_j : idx_j + dur]
-                        # Memastikan jam fisik berurutan tanpa selisih yang tak wajar
                         is_consecutive = all(
                             block_j[k] == j + k for k in range(dur)
                         )
@@ -372,7 +370,7 @@ class Scheduler:
                             for s_id in s_ids_g:
                                 model.Add(X[(s_id, h, j)] == 0)
 
-        # ==================== SOFT CONSTRAINTS (PENGATURAN KUALITAS JADWAL) ====================
+        # ==================== SOFT CONSTRAINTS ====================
         penalty_terms = []
 
         # Pinalti Memadatkan Pelajaran ke Jam Awal
@@ -506,3 +504,7 @@ class Scheduler:
             log_progress=log_progress,
         )
         return df_hasil, df_laporan
+
+
+# Alias penamaan agar kompatibel jika dipanggil sebagai 'Scheduler' maupun 'SchedulerSolver'
+Scheduler = SchedulerSolver
