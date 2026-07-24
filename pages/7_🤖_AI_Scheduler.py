@@ -5,10 +5,8 @@ import pandas as pd
 import streamlit as st
 
 # ==========================================
-# 1. PERBAIKAN IMPORT PATH (SYSTEM PATH RESOLVER)
+# 1. PERBAIKAN PATH IMPORT SYSTEM
 # ==========================================
-# Menambahkan root directory ke sys.path agar file di folder pages/
-# dapat mengimpor modul dari folder utama maupun subfolder (scheduler_core)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 if ROOT_DIR not in sys.path:
@@ -24,7 +22,7 @@ try:
 except ImportError as e:
     st.error(
         f"❌ **Gagal Mengimpor Modul System**: {e}\n\n"
-        "Pastikan file `scheduler_engine.py` dan folder `scheduler_core/` berada di root direktori project Anda."
+        "Pastikan file `scheduler_engine.py` berada di root folder proyek Anda."
     )
     st.stop()
 
@@ -44,14 +42,21 @@ st.markdown("---")
 # ==========================================
 # 3. VERIFIKASI DATA MASTER DI SESSION STATE
 # ==========================================
-if "scheduler" not in st.session_state:
+# Pengecekan otomatis key Session State (mendukung 'scheduler' & 'data_scheduler')
+session_key = None
+if "scheduler" in st.session_state:
+    session_key = "scheduler"
+elif "data_scheduler" in st.session_state:
+    session_key = "data_scheduler"
+
+if not session_key:
     st.warning(
         "⚠️ **Data Master Belum Diunggah / Siap!**\n\n"
-        "Silakan siapkan data master (Guru, Rombel, Mengajar, Mapel, Slot) di menu awal sebelum menggunakan AI Generator ini."
+        "Silakan unggah dan siapkan data master (Guru, Rombel, Mengajar, Mapel, Slot) di menu awal sebelum menjalankan AI Generator ini."
     )
     st.stop()
 
-scheduler_data = st.session_state["scheduler"]
+scheduler_data = st.session_state[session_key]
 
 # ==========================================
 # 4. SIDEBAR - PANEL KONTROL SOLVER
@@ -73,7 +78,7 @@ use_fallback = st.sidebar.checkbox(
     help="Jika diaktifkan, solver akan melonggarkan batasan secara bertahap jika skenario awal gagal.",
 )
 
-# Panel Informasi Data Master
+# Status Data Master
 st.markdown("### 📋 Status Data Master Terdeteksi")
 col_s1, col_s2, col_s3, col_s4 = st.columns(4)
 
@@ -124,12 +129,10 @@ if st.button(
 ):
     with st.spinner("🔍 Menjalankan Optimasi CP-SAT Solver..."):
         if use_fallback:
-            # Menggunakan skenario fallback bertahap
             df_jadwal, df_laporan = execute_scheduler_with_fallback(
                 scheduler_data
             )
         else:
-            # Skenario tunggal
             solver_single = SchedulerSolver(scheduler_data)
             success = solver_single.run_solver(
                 timeout_seconds=timeout_sec,
@@ -142,7 +145,6 @@ if st.button(
             else:
                 df_jadwal, df_laporan = pd.DataFrame(), pd.DataFrame()
 
-    # Simpan ke session_state jika hasil ditemukan
     if not df_jadwal.empty:
         st.session_state["df_jadwal_hasil"] = df_jadwal
         st.session_state["df_laporan_guru"] = df_laporan
@@ -153,13 +155,13 @@ if st.button(
         st.error(
             "❌ **Solver Gagal Menemukan Solusi!**\n\n"
             "**Saran Perbaikan:**\n"
-            "1. Pastikan fitur **'Gunakan Multi-Skenario Fallback'** di sidebar tetap diaktifkan.\n"
+            "1. Pastikan opsi **'Gunakan Multi-Skenario Fallback'** di sidebar tetap tercentang.\n"
             "2. Naikkan **Batas Max JP Guru / Hari**.\n"
             "3. Periksa ketersediaan jam slot KBM terhadap total JP Rombel."
         )
 
 # ==========================================
-# 6. TAMPILAN HASIL & EKSKOR DATA
+# 6. TAMPILAN HASIL & EKSPOR DATA
 # ==========================================
 if (
     "df_jadwal_hasil" in st.session_state
@@ -175,7 +177,6 @@ if (
     with tab1:
         st.subheader("📌 Matriks Hasil Penjadwalan Utama")
 
-        # Filter Rombel
         rombel_list = (
             sorted(df_jadwal["ID_Rombel"].unique().tolist())
             if "ID_Rombel" in df_jadwal.columns
@@ -197,10 +198,9 @@ if (
         st.dataframe(df_laporan, use_container_width=True, hide_index=True)
 
     with tab3:
-        st.subheader("📥 Unduh Laporan Excel / CSV")
+        st.subheader("📥 Unduh Laporan Excel")
 
         try:
-            # Menggunakan ScheduleExporter yang sudah aman dari KeyError
             excel_bytes = ScheduleExporter.export_to_excel(df_jadwal)
 
             st.download_button(
@@ -211,4 +211,4 @@ if (
                 use_container_width=True,
             )
         except Exception as err:
-            st.error(f"⚠️ Gagal mengeksport ke file Excel: {err}")
+            st.error(f"⚠️ Gagal mengekspor ke file Excel: {err}")
