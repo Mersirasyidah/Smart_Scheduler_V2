@@ -1,34 +1,30 @@
-# database.py
 import os
 import pandas as pd
 import streamlit as st
 
-# Lokasi file database Excel di dalam folder data
-DATABASE = "data/database_scheduler.xlsx"
+# Menggunakan absolute path agar aman dijalankan dari direktori manapun
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATABASE = os.path.join(BASE_DIR, "data", "database_scheduler.xlsx")
 
 
+# Gunakan cache_data agar Excel tidak dibaca ulang terus-menerus
+@st.cache_data
 def load_database():
     """
-    Membaca seluruh sheet dari file Excel
-    Mengembalikan dictionary:
-    {
-        "Guru": dataframe,
-        "Mapel": dataframe,
-        ...
-    }
+    Membaca seluruh sheet dari file Excel dan menyimpannya ke cache.
     """
-    # Cek apakah file ada
     if not os.path.exists(DATABASE):
         st.error(f"❌ File database tidak ditemukan di lokasi:\n{DATABASE}")
         st.stop()
 
     try:
-        # Membaca seluruh workbook
         excel = pd.ExcelFile(DATABASE, engine="openpyxl")
         data = {}
 
         for sheet in excel.sheet_names:
-            data[sheet] = pd.read_excel(
+            # Strip untuk mengantisipasi spasi tersembunyi pada nama sheet
+            clean_sheet_name = str(sheet).strip()
+            data[clean_sheet_name] = pd.read_excel(
                 DATABASE,
                 sheet_name=sheet,
                 engine="openpyxl"
@@ -43,7 +39,7 @@ def load_database():
 
 
 # ==========================================================
-# Fungsi-fungsi pembantu (Sesuai nama sheet asli Excel Anda)
+# Fungsi-fungsi pembantu dengan pembersihan cache opsional
 # ==========================================================
 
 def get_guru():
@@ -72,4 +68,4 @@ if __name__ == "__main__":
     print("=" * 50)
     print("Folder kerja    :", os.getcwd())
     print("Lokasi database :", DATABASE)
-    print("File ditemukan  :", os.path.exists(DATABASE))
+    print("File ditemukan :", os.path.exists(DATABASE))
