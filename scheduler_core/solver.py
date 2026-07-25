@@ -17,7 +17,7 @@ class SchedulerSolver:
 
         records = self.guru_mengajar.to_dict(orient='records')
 
-        # Prioritaskan pengalokasian: PJOK dulu, lalu blok jam terbesar (3 JP, 2 JP)
+        # Urutkan prioritas: PJOK dulu, lalu blok jam terbesar (3 JP, 2 JP)
         def priority_key(item):
             mapel = str(item['Mapel']).lower()
             is_pjok = 'jasmani' in mapel or 'olahraga' in mapel or 'pjok' in mapel
@@ -37,19 +37,24 @@ class SchedulerSolver:
                 placed = False
                 
                 for day in self.days:
+                    # 1. Cek Hari MGMP Guru
                     if not self.constraints.is_teacher_available(guru_id, day):
                         continue
-                        
+                    
+                    # 2. Cek Batas Maksimal 2 JP/hari (kecuali mapel 3 JP)
+                    if self.constraints.is_daily_limit_exceeded(schedule_board, day, guru_id, kelas, mapel, block_size):
+                        continue
+
                     available_jams = self.slots_by_day.get(day, [])
                     for jam in available_jams:
-                        # Cek apakah cukup jam berturut-turut
+                        # 3. Cek ketersediaan jam berturut-turut untuk block_size
                         if all((jam + offset) in available_jams for offset in range(block_size)):
                             
-                            # Cek Aturan PJOK
+                            # 4. Cek Aturan Khusus PJOK
                             if not self.constraints.is_pjok_valid(mapel, kelas, day, jam):
                                 continue
 
-                            # Cek Bentrok Slot
+                            # 5. Cek Bentrok Guru / Kelas
                             if self.constraints.is_slot_free(schedule_board, day, jam, block_size, guru_id, kelas):
                                 for offset in range(block_size):
                                     slot_key = (day, jam + offset)
