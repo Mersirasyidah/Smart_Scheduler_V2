@@ -39,6 +39,7 @@ class ScheduleExporter:
 
     @staticmethod
     def get_first_name(nama_full):
+        """Mengambil nama depan guru secara bersih (tanpa gelar)."""
         if pd.isna(nama_full):
             return ""
         clean_str = re.sub(r'[,.].*', '', str(nama_full)).strip()
@@ -77,7 +78,7 @@ class ScheduleExporter:
 
     @classmethod
     def create_class_matrix_by_name(cls, df_results):
-        """TAMPILAN 1: Menggunakan Nama Depan Guru & Singkatan Mapel -> Contoh: IPA (Purwanto)"""
+        """TAMPILAN 1: Matriks dengan Singkatan Mapel & Nama Depan Guru -> contoh: IPA (Purwanto)"""
         if df_results.empty:
             return pd.DataFrame()
             
@@ -92,7 +93,7 @@ class ScheduleExporter:
 
     @classmethod
     def create_class_matrix_by_code(cls, df_results):
-        """TAMPILAN 2: Menggunakan Inisial/Kode Mapel & ID Guru -> Contoh: M08 (G01)"""
+        """TAMPILAN 2: Matriks dengan Kode Mapel & ID Guru -> contoh: M11 (G14)"""
         if df_results.empty:
             return pd.DataFrame()
             
