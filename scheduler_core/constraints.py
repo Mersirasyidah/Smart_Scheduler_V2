@@ -26,27 +26,28 @@ class ScheduleConstraints:
                         return False
         return True
 
-    def is_daily_limit_exceeded(self, schedule_board, hari, guru_id, kelas, mapel, block_size):
+    def is_pjok_valid(self, mapel, kelas, hari, jam_start):
         """
-        VALIDASI:
-        Maksimal mengajar mapel yang sama di kelas yang sama adalah 2 JP per hari,
-        KECUALI jika block_size / total JP mapel tersebut = 3.
+        VALIDASI KHUSUS PJOK (M11 / Olahraga):
+        - Kelas 7 & 8: Jam 1-3 (Khusus Senin Jam 2-4)
+        - Kelas 9    : Jam 4-6
         """
-        if block_size == 3:
-            # Jika alokasi jam memang 3 JP sekaligus, izinkan
-            return False
-
-        existing_jp = 0
-        for (h, _), entries in schedule_board.items():
-            if h == hari:
-                for entry in entries:
-                    if entry['guru_id'] == guru_id and entry['kelas'] == kelas and entry['mapel'] == mapel:
-                        existing_jp += 1
-
-        # Jika sudah ada jam sebelumnya dan total penambahan melebihi 2 JP
-        if (existing_jp + block_size) > 2:
+        mapel_str = str(mapel).lower()
+        is_pjok = 'jasmani' in mapel_str or 'olahraga' in mapel_str or 'pjok' in mapel_str or 'm11' in mapel_str
+        
+        if not is_pjok:
             return True
-        return False
 
+        tingkat = str(kelas)[0] if str(kelas)[0].isdigit() else ''
+        
+        if tingkat in ['7', '8']:
+            if hari == 'Senin':
+                return jam_start == 2
+            else:
+                return jam_start == 1
+        elif tingkat == '9':
+            return jam_start == 4
+            
+        return True
 
 ConstraintManager = ScheduleConstraints
