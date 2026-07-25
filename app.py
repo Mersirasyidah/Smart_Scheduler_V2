@@ -30,19 +30,14 @@ def clean_first_name(nama_full):
 def get_slot_structure_by_mapel(mapel_raw, val_raw):
     norm = normalize_text(mapel_raw)
     
-    # 1. Matematika & IPA -> 2, 2, 1
     if any(k in norm for k in ['matematika', 'mtk', 'm07', 'ipa', 'm08']):
         return [2, 2, 1]
-    # 2. Bahasa Indonesia -> 2, 2, 2
     elif any(k in norm for k in ['indonesia', 'bin', 'm06']):
         return [2, 2, 2]
-    # 3. IPS & Bahasa Inggris -> 2, 2
     elif any(k in norm for k in ['ips', 'm09', 'inggris', 'ing', 'big', 'm10']):
         return [2, 2]
-    # 4. Pendidikan Pancasila -> 2, 1
     elif any(k in norm for k in ['pancasila', 'pp', 'pkn', 'm05']):
         return [2, 1]
-    # 5. Lainnya -> 3
     else:
         if not pd.isna(val_raw):
             val_str = str(val_raw).strip()
@@ -107,9 +102,8 @@ def generate_schedule(excel_source):
         if 'Hari MGMP' in guru_df.columns:
             mgmp_days = dict(zip(guru_df['ID Guru'].astype(str).str.strip(), guru_df['Hari MGMP'].fillna('')))
         if 'Status' in guru_df.columns:
-            guru_status = dict(zip(guru_df['ID Guru'].astype(str).str.strip(), guru_df['Status'].fillna('')))
+            guru_status = dict(zip(guru_df['ID Guru'].astype(str).str.strip(), guru_status.get('Status', guru_df['Status'].fillna(''))))
 
-    # CEK KOLOM SLOT
     slot_col = None
     for c in gm_df.columns:
         if any(kw in c.lower() for kw in ['slot', 'alokasi', 'jp', 'jam']):
@@ -118,7 +112,6 @@ def generate_schedule(excel_source):
     if not slot_col:
         slot_col = gm_df.columns[-1]
 
-    # FILTER SLOT KBM (Memastikan Jam ke-2 Senin tidak terlewatkan)
     slot_df['Jam'] = pd.to_numeric(slot_df['Jam'], errors='coerce')
     slot_df = slot_df.dropna(subset=['Jam'])
     slot_df['Jam'] = slot_df['Jam'].astype(int)
@@ -126,7 +119,6 @@ def generate_schedule(excel_source):
     jenis_col = [c for c in slot_df.columns if 'jenis' in c.lower() or 'keterangan' in c.lower()]
     if jenis_col:
         j_name = jenis_col[0]
-        # Hanya buang yang bertuliskan Upacara/Istirahat/Sholat/Pembiasaan
         kbm_slots = slot_df[~slot_df[j_name].astype(str).str.upper().str.contains('ISTIRAHAT|UPACARA|PEMBIASAAN|SHOLAT')].copy()
     else:
         kbm_slots = slot_df.copy()
@@ -141,7 +133,6 @@ def generate_schedule(excel_source):
     gm_df['ID Guru'] = gm_df['ID Guru'].astype(str).str.strip()
     records = gm_df.to_dict(orient='records')
 
-    # PRIORITAS B. INGGRIS & PJOK DILAYANI TERLEBIH DAHULU
     def get_priority(item):
         norm = normalize_text(item['Mapel'])
         if any(k in norm for k in ['inggris', 'ing', 'big', 'm10']):
@@ -178,9 +169,11 @@ def generate_schedule(excel_source):
         for block_size in slot_blocks:
             placed = False
 
+            # Tambahkan mode 'last_resort' untuk memaksa penempatan jika slot biasa penuh
+            modes = ['strict', 'moderate', 'flexible', 'emergency', 'last_resort']
             search_days = ['Jumat', 'Senin', 'Rabu', 'Kamis', 'Selasa'] if is_inggris else days
 
-            for mode in ['strict', 'moderate', 'flexible', 'emergency']:
+            for mode in modes:
                 if placed:
                     break
 
@@ -188,30 +181,36 @@ def generate_schedule(excel_source):
                     if placed:
                         break
 
-                    if day in days_assigned and mode not in ['flexible', 'emergency']:
+                    # Abaikan batasan hari yang sama jika sudah di mode darurat
+                    if day in days_assigned and mode not in ['flexible', 'emergency', 'last_resort']:
                         continue
 
                     is_mgmp_today = (mgmp_day.lower() == day.lower()) or (is_inggris and day.lower() == 'selasa')
 
-                    if is_mgmp_today and mode not in ['flexible', 'emergency']:
+                    if is_mgmp_today and mode not in ['flexible', 'emergency', 'last_resort']:
                         if is_gtt or is_inggris:
                             continue
 
                     available_jams = slots_by_day.get(day, [])
 
                     for jam in available_jams:
+                        # Relaksasi aturan posisi jam untuk PJOK dan MTK jika di mode darurat
                         if is_pjok and mode in ['strict', 'moderate'] and jam != 1:
                             continue
                         if is_mtk and block_size == 2 and mode in ['strict', 'moderate'] and jam > 2:
                             continue
 
-                        if is_mgmp_today and not is_gtt and mode not in ['flexible', 'emergency']:
+                        if is_mgmp_today and not is_gtt and mode not in ['flexible', 'emergency', 'last_resort']:
                             if (jam + block_size - 1) > 3:
                                 continue
 
+                        # Cek kontinuitas slot
                         if not all((jam + offset) in available_jams for offset in range(block_size)):
-                            continue
+                            # Jika di mode last_resort, pecah blok jika slot tidak berurutan
+                            if mode != 'last_resort':
+                                continue
 
+                        # Cek Bentrok Guru atau Kelas
                         bentrok = False
                         for offset in range(block_size):
                             slot_key = (day, jam + offset)
@@ -247,7 +246,6 @@ def generate_schedule(excel_source):
                     'block_size': block_size
                 })
 
-    # OUTPUT DATA
     rows = []
     for (hari, jam), assignments in schedule_board.items():
         for item in assignments:
@@ -315,10 +313,10 @@ with t3:
     st.dataframe(df_schedule, use_container_width=True)
 with t4:
     if unassigned:
-        st.warning(f"Terdapat {len(unassigned)} item belum terjadwal:")
+        st.warning(f"Terdapat {len(unassigned)} alokasi jam belum mendapat slot:")
         st.dataframe(pd.DataFrame(unassigned), use_container_width=True)
     else:
-        st.success("🎉 Berhasil! Jam ke-2 Senin beserta seluruh jam KBM terisi dengan sempurna!")
+        st.success("🎉 Berhasil! Seluruh alokasi jam berhasil dijadwalkan tanpa ada unassigned!")
 
 # DOWNLOAD EXCEL
 buffer = io.BytesIO()
