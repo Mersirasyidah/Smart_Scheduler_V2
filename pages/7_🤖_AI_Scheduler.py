@@ -43,11 +43,17 @@ def parse_slot_list(val):
         return []
     return [int(x.strip()) for x in str(val).split(',') if x.strip().isdigit()]
 
+# --- FUNGSI AMAN MEMBACA SHEET EXCEL ---
 def get_sheet_df(xls, target_name):
+    # Bersihkan target_name dari spasi/karakter non-alphanumeric
+    target_clean = re.sub(r'[^a-zA-Z0-9]', '', str(target_name)).lower()
     for sheet in xls.sheet_names:
-        if sheet.strip().lower() == target_name.strip().lower():
+        sheet_clean = re.sub(r'[^a-zA-Z0-9]', '', str(sheet)).lower()
+        if target_clean in sheet_clean or sheet_clean in target_clean:
             return pd.read_excel(xls, sheet)
-    raise ValueError(f"Sheet '{target_name}' tidak ditemukan di file Excel.")
+    
+    # Fallback jika nama persis tidak ketemu
+    raise ValueError(f"Sheet '{target_name}' tidak ditemukan! Sheet yang tersedia di Excel: {xls.sheet_names}")
 
 # --- ENGINE ALGORITMA PENYUSUNAN JADWAL ---
 def generate_schedule(excel_path):
@@ -107,9 +113,7 @@ def generate_schedule(excel_path):
                     
                     is_mgmp_day = (mgmp_day == day.lower())
 
-                    # Jika hari ini adalah Hari MGMP bagi Guru:
-                    # - Guru GTT: Libur penuh (TIDAK Boleh Mengajar)
-                    # - Guru Non-GTT (PNS/PPPK): Boleh mengajar HANYA di Jam ke 1-3
+                    # Guru GTT: Libur Penuh di Hari MGMP
                     if is_mgmp_day and status == 'GTT':
                         continue
 
@@ -126,7 +130,7 @@ def generate_schedule(excel_path):
 
                     available_jams = slots_by_day.get(day, [])
                     for jam in available_jams:
-                        # Cek batasan MGMP Non-GTT (Jam ke 1-3 saja, jadi jam + offset <= 3)
+                        # Guru Non-GTT (PNS/PPPK): Boleh mengajar di Hari MGMP HANYA Jam 1-3
                         if is_mgmp_day and status != 'GTT':
                             if (jam + block_size - 1) > 3:
                                 continue
