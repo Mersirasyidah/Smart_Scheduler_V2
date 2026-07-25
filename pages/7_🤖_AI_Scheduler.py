@@ -169,3 +169,27 @@ if btn_generate or 'results' in st.session_state:
 
 else:
     st.info("👈 Klik tombol **'Jalankan Generator Jadwal'** pada sidebar di sebelah kiri untuk memulai penyusunan jadwal otomatis.")
+
+# --- Di dalam file pages/7_🤖_AI_Scheduler.py ---
+from scheduler_core.exporter import ScheduleExporter
+
+# ...
+# Setelah running engine:
+df_schedule = ScheduleExporter.to_dataframe(raw_schedule)
+matrix_nama = ScheduleExporter.create_class_matrix_by_name(df_schedule)
+matrix_kode = ScheduleExporter.create_class_matrix_by_code(df_schedule)
+
+tab_nama, tab_kode, tab_detail, tab_unassigned = st.tabs([
+    "👤 Matriks (Nama Guru)", 
+    "🔢 Matriks (Kode Mapel)", 
+    "📋 Master List", 
+    "⚠️ Unassigned"
+])
+
+with tab_nama:
+    st.subheader("Matriks Jadwal: Singkatan Mapel & Nama Depan Guru")
+    st.dataframe(matrix_nama, use_container_width=True)
+
+with tab_kode:
+    st.subheader("Matriks Jadwal: Kode Mapel (M11) & ID Guru (G14)")
+    st.dataframe(matrix_kode, use_container_width=True)
