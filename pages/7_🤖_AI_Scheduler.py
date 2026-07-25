@@ -8,7 +8,13 @@ st.set_page_config(page_title="AI Schedule Generator", page_icon="🤖", layout=
 st.title("🤖 AI Automatic Schedule Generator")
 st.write("Sistem Pembuat Jadwal Pelajaran Otomatis Bebas Bentrok dan Sesuai Aturan KBM.")
 
-target_file = st.sidebar.text_input("File Database Excel", value="database_scheduler.xlsx")
+# --- SIDEBAR & FILE INPUT ---
+st.sidebar.header("📁 Input Database")
+uploaded_file = st.sidebar.file_uploader("Upload File Database Excel", type=["xlsx", "xls"])
+target_file_path = st.sidebar.text_input("Atau ketik jalur file lokal:", value="database_scheduler.xlsx")
+
+# Prioritaskan file upload jika ada, jika tidak gunakan path lokal
+input_data = uploaded_file if uploaded_file is not None else target_file_path
 
 # --- MAPPING KODE & SINGKATAN MAPEL ---
 MAPEL_TO_KODE = {
@@ -45,19 +51,17 @@ def parse_slot_list(val):
 
 # --- FUNGSI AMAN MEMBACA SHEET EXCEL ---
 def get_sheet_df(xls, target_name):
-    # Bersihkan target_name dari spasi/karakter non-alphanumeric
     target_clean = re.sub(r'[^a-zA-Z0-9]', '', str(target_name)).lower()
     for sheet in xls.sheet_names:
         sheet_clean = re.sub(r'[^a-zA-Z0-9]', '', str(sheet)).lower()
         if target_clean in sheet_clean or sheet_clean in target_clean:
             return pd.read_excel(xls, sheet)
     
-    # Fallback jika nama persis tidak ketemu
-    raise ValueError(f"Sheet '{target_name}' tidak ditemukan! Sheet yang tersedia di Excel: {xls.sheet_names}")
+    raise ValueError(f"Sheet '{target_name}' tidak ditemukan! Sheet yang tersedia di Excel ini: {xls.sheet_names}. Pastikan Anda memilih file database input, bukan file hasil keluaran jadwal.")
 
 # --- ENGINE ALGORITMA PENYUSUNAN JADWAL ---
-def generate_schedule(excel_path):
-    xls = pd.ExcelFile(excel_path)
+def generate_schedule(excel_source):
+    xls = pd.ExcelFile(excel_source)
     guru_df = get_sheet_df(xls, 'Guru')
     slot_df = get_sheet_df(xls, 'Slot')
     gm_df = get_sheet_df(xls, 'Guru_Mengajar')
@@ -213,7 +217,7 @@ btn_generate = st.button("🚀 Generate Jadwal Sekarang", type="primary", use_co
 if btn_generate or 'df_schedule' not in st.session_state:
     with st.spinner("Sedang memproses dan mengoptimalkan jadwal..."):
         try:
-            df_sched, unassigned_list = generate_schedule(target_file)
+            df_sched, unassigned_list = generate_schedule(input_data)
             st.session_state['df_schedule'] = df_sched
             st.session_state['unassigned'] = unassigned_list
         except Exception as e:
