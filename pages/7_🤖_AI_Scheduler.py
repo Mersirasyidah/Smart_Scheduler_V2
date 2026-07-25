@@ -61,7 +61,6 @@ def clean_first_name(nama_full):
 def parse_slot_list(val):
     if pd.isna(val):
         return []
-    # Mendukung format pemisah koma seperti "2,1" atau "2, 1"
     return [int(x.strip()) for x in str(val).split(',') if str(x).strip().isdigit()]
 
 def get_mapel_info(mapel_raw):
@@ -72,9 +71,9 @@ def get_mapel_info(mapel_raw):
     if not kode:
         if 'pancasila' in m_str or 'pp' in m_str or 'pkn' in m_str:
             kode, singkatan = 'M05', 'PP'
-        elif 'inggris' in m_str:
+        elif 'inggris' in m_str or 'big' in m_str:
             kode, singkatan = 'M10', 'BIG'
-        elif 'matematika' in m_str:
+        elif 'matematika' in m_str or 'mtk' in m_str:
             kode, singkatan = 'M07', 'MTK'
         elif 'jasmani' in m_str or 'pjok' in m_str:
             kode, singkatan = 'M11', 'PJOK'
@@ -83,7 +82,7 @@ def get_mapel_info(mapel_raw):
             singkatan = str(mapel_raw).strip()[:4].upper()
             
     if not singkatan:
-        singkatan = str(mapel_raw).strip()[:4].upper()
+        singkatan = 'BIG' if kode == 'M10' else str(mapel_raw).strip()[:4].upper()
         
     return kode, singkatan
 
@@ -142,6 +141,7 @@ def generate_schedule(excel_source):
         kelas = str(item['Kelas'])
         is_pjok = 'jasmani' in mapel or 'olahraga' in mapel or 'pjok' in mapel or 'm11' in mapel
         is_mtk_ipa = 'matematika' in mapel or 'mtk' in mapel or 'ilmu pengetahuan alam' in mapel or 'ipa' in mapel
+        is_inggris = 'inggris' in mapel or 'big' in mapel or 'm10' in mapel
         is_kelas_9 = kelas.startswith('9')
 
         if is_pjok and is_kelas_9:
@@ -150,8 +150,10 @@ def generate_schedule(excel_source):
             return (1, -item.get('JP', 0))
         elif is_pjok:
             return (2, -item.get('JP', 0))
-        else:
+        elif is_inggris:
             return (3, -item.get('JP', 0))
+        else:
+            return (4, -item.get('JP', 0))
 
     records.sort(key=get_priority)
 
@@ -174,9 +176,6 @@ def generate_schedule(excel_source):
         for block_size in slot_blocks:
             placed = False
             
-            # Kita lakukan 2 pass:
-            # Pass 1: Mencoba menempatkan dengan aturan ketat (Aturan Khusus Kelas 9 & MGMP)
-            # Pass 2: Jika gagal, rilekskan aturan khusus kelas 9 agar slot tetap terisi (Fallback)
             for mode in ['strict', 'fallback']:
                 if placed:
                     break
@@ -185,12 +184,12 @@ def generate_schedule(excel_source):
                     if placed:
                         break
 
-                    # 1. ATURAN PISAH HARI
+                    # 1. ATURAN PISAH HARI (Maksimal 1 blok per mapel per kelas per hari)
                     existing_jp_in_day = 0
                     for (h, _), entries in schedule_board.items():
                         if h == day:
                             for e in entries:
-                                if e['kelas'] == kelas and str(e['mapel']).strip().lower() == str(mapel).strip().lower():
+                                if e['kelas'] == kelas and str(e['mapel']).strip().lower() == mapel_lower:
                                     existing_jp_in_day += 1
 
                     if existing_jp_in_day > 0:
@@ -207,14 +206,14 @@ def generate_schedule(excel_source):
                     available_jams = slots_by_day.get(day, [])
                     
                     for jam in available_jams:
-                        if is_mgmp_day and status != 'GTT':
+                        if is_mgmp_day and status != 'GTT' and mode == 'strict':
                             if (jam + block_size - 1) > 3:
                                 continue
 
                         if not all((jam + offset) in available_jams for offset in range(block_size)):
                             continue
 
-                        # Mode Strict: Terapkan aturan khusus kelas 9
+                        # Mode Strict: Aturan khusus kelas 9
                         if mode == 'strict':
                             if is_kelas_9 and is_pjok:
                                 if jam != 3 or block_size != 3:
@@ -224,13 +223,6 @@ def generate_schedule(excel_source):
                                 target_pjok_day = pjok_day_kelas9.get(kelas)
                                 if target_pjok_day and day == target_pjok_day:
                                     if jam != 1:
-                                        continue
-
-                            if is_pjok and not is_kelas_9:
-                                tingkat = str(kelas)[0] if str(kelas)[0].isdigit() else ''
-                                if tingkat in ['7', '8']:
-                                    valid_jam = (jam == 2) if day == 'Senin' else (jam == 1)
-                                    if not valid_jam:
                                         continue
 
                         # 3. CEK BENTROK GURU & KELAS
@@ -341,12 +333,12 @@ tab_nama, tab_kode, tab_detail, tab_unassigned = st.tabs([
 
 with tab_nama:
     st.subheader("1. Tampilan Matriks: Singkatan Mapel & Nama Depan Guru")
-    st.caption("Contoh isi sel: PP (Supri)")
+    st.caption("Contoh isi sel: BIG (Lestari)")
     st.dataframe(matrix_nama, use_container_width=True)
 
 with tab_kode:
     st.subheader("2. Tampilan Matriks: Kode Mapel & ID Guru")
-    st.caption("Contoh isi sel: M05 (G14)")
+    st.caption("Contoh isi sel: M10 (G03 / G05 / G29)")
     st.dataframe(matrix_kode, use_container_width=True)
 
 with tab_detail:
