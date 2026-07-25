@@ -47,17 +47,29 @@ def clean_first_name(nama_full):
 def parse_slot_list(val):
     if pd.isna(val):
         return []
-    return [int(x.strip()) for x in str(val).split(',') if x.strip().isdigit()]
+    return [int(x.strip()) for x in str(val).split(',') if str(x).strip().isdigit()]
 
 # --- FUNGSI AMAN MEMBACA SHEET EXCEL ---
 def get_sheet_df(xls, target_name):
     target_clean = re.sub(r'[^a-zA-Z0-9]', '', str(target_name)).lower()
+    
+    # 1. Prioritaskan pencocokan eksak (Exact match)
     for sheet in xls.sheet_names:
         sheet_clean = re.sub(r'[^a-zA-Z0-9]', '', str(sheet)).lower()
-        if target_clean in sheet_clean or sheet_clean in target_clean:
-            return pd.read_excel(xls, sheet)
+        if target_clean == sheet_clean:
+            df = pd.read_excel(xls, sheet)
+            df.columns = [str(c).strip() for c in df.columns] # Clean column headers
+            return df
+
+    # 2. Match parsial jika eksak tidak ada
+    for sheet in xls.sheet_names:
+        sheet_clean = re.sub(r'[^a-zA-Z0-9]', '', str(sheet)).lower()
+        if target_clean in sheet_clean:
+            df = pd.read_excel(xls, sheet)
+            df.columns = [str(c).strip() for c in df.columns]
+            return df
     
-    raise ValueError(f"Sheet '{target_name}' tidak ditemukan! Sheet yang tersedia di Excel ini: {xls.sheet_names}. Pastikan Anda memilih file database input, bukan file hasil keluaran jadwal.")
+    raise ValueError(f"Sheet '{target_name}' tidak ditemukan! Sheet di Excel ini: {xls.sheet_names}.")
 
 # --- ENGINE ALGORITMA PENYUSUNAN JADWAL ---
 def generate_schedule(excel_source):
@@ -75,6 +87,13 @@ def generate_schedule(excel_source):
         if 'Status' in guru_df.columns:
             guru_status = dict(zip(guru_df['ID Guru'], guru_df['Status'].fillna('')))
 
+    # Penanganan fleksibel nama kolom Slot/Alokasi di Guru_Mengajar
+    slot_col = 'Slot'
+    for c in gm_df.columns:
+        if 'slot' in c.lower() or 'alokasi' in c.lower():
+            slot_col = c
+            break
+
     valid_types = ['PEMBELAJARAN', 'KBM']
     kbm_slots = slot_df[slot_df['Jenis'].astype(str).str.strip().str.upper().isin(valid_types)].dropna(subset=['Jam']).copy()
     kbm_slots['Jam'] = kbm_slots['Jam'].astype(int)
@@ -82,7 +101,7 @@ def generate_schedule(excel_source):
     days = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat']
     slots_by_day = {d: kbm_slots[kbm_slots['Hari'] == d]['Jam'].tolist() for d in days}
 
-    gm_df['Slot_List'] = gm_df['Slot'].apply(parse_slot_list)
+    gm_df['Slot_List'] = gm_df[slot_col].apply(parse_slot_list)
     records = gm_df.to_dict(orient='records')
 
     # Urutkan Prioritas: PJOK & Mapel durasi besar (3 JP) diutamakan
