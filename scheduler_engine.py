@@ -26,7 +26,7 @@ class Scheduler:
             elif 'Jam' in self.slot.columns:
                 max_hours = int(self.slot['Jam'].max())
 
-        # 2. Inisialisasi SchedulerSolver
+        # 2. Inisialisasi SchedulerSolver dengan pola aman
         try:
             self.solver_instance = SchedulerSolver(self, days, max_hours)
         except Exception:
@@ -43,15 +43,14 @@ class Scheduler:
                 st.error(f"❌ Gagal menginisialisasi SchedulerSolver: {e}")
                 return pd.DataFrame(), pd.DataFrame()
 
-        # Jaminan bahwa self.assignments tidak None sebelum solve dijalankan
+        # Garansi atribut penting tidak bernilai None sebelum solve() dipanggil
         if hasattr(self.solver_instance, 'assignments') and self.solver_instance.assignments is None:
             self.solver_instance.assignments = []
 
-        # 3. Jalankan method solve
+        # 3. Jalankan method solve dengan berbagai toleransi argumen timeout
         is_success = False
         try:
             if hasattr(self.solver_instance, 'solve'):
-                # Coba passing parameter timeout jika diterima oleh solve()
                 try:
                     result = self.solver_instance.solve(time_limit=timeout)
                 except TypeError:
@@ -72,7 +71,7 @@ class Scheduler:
             st.code(traceback.format_exc())
             return pd.DataFrame(), pd.DataFrame()
 
-        # 4. Ambil hasil jadwal
+        # 4. Ambil hasil jadwal dari berbagai atribut/method yang mungkin digunakan
         df_hasil = pd.DataFrame()
         if hasattr(self.solver_instance, "extract_results"):
             df_hasil = self.solver_instance.extract_results()
@@ -83,7 +82,7 @@ class Scheduler:
         elif hasattr(self.solver_instance, "df_hasil"):
             df_hasil = getattr(self.solver_instance, "df_hasil")
 
-        # 5. Ambil laporan detail guru jika ada
+        # 5. Ambil laporan detail guru jika method tersedia
         df_laporan_guru = pd.DataFrame()
         if hasattr(self.solver_instance, "generate_teacher_report") and not df_hasil.empty:
             try:
