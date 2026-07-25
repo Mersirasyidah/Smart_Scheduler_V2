@@ -11,7 +11,7 @@ class Scheduler:
         self.solver_instance = None
 
     def generate(self, timeout=120):
-        # Mengirim kelima Dataframe langsung ke SchedulerSolver
+        # 1. Inisialisasi SchedulerSolver dengan mengirimkan 5 Dataframe secara langsung
         try:
             self.solver_instance = SchedulerSolver(
                 self.guru, 
@@ -21,7 +21,7 @@ class Scheduler:
                 self.slot
             )
         except TypeError:
-            # Fallback jika Solver menggunakan kata kunci data_dict / kwargs
+            # Fallback jika SchedulerSolver menerima dictionary
             try:
                 self.solver_instance = SchedulerSolver(data={
                     "guru": self.guru,
@@ -30,17 +30,16 @@ class Scheduler:
                     "mapel": self.mapel,
                     "slot": self.slot
                 })
-            except Exception:
-                # Fallback terakhir jika Solver memang menerima objek scheduler
-                self.solver_instance = SchedulerSolver(self)
+            except Exception as e:
+                raise RuntimeError(f"Gagal menginisialisasi SchedulerSolver: {e}")
 
-        # Jalankan solver
+        # 2. Jalankan proses optimasi jadwal
         is_success = self.solver_instance.run_solver(timeout_seconds=timeout)
         
         if is_success:
             df_hasil = self.solver_instance.extract_results()
             
-            # Panggil fungsi laporan guru jika ada
+            # 3. Ambil laporan detail guru jika method tersedia
             if hasattr(self.solver_instance, "generate_teacher_report"):
                 df_laporan_guru = self.solver_instance.generate_teacher_report(df_hasil)
             else:
