@@ -28,35 +28,22 @@ def clean_first_name(nama_full):
     return words[0] if words else ""
 
 def get_slot_structure_by_mapel(mapel_raw, val_raw):
-    """
-    Aturan Pembagian Jam berdasarkan Mapel:
-    1. Matematika, IPA -> 2, 2, 1
-    2. Bahasa Indonesia -> 2, 2, 2
-    3. IPS, Bahasa Inggris -> 2, 2
-    4. Pendidikan Pancasila -> 2, 1
-    5. Selain itu -> 3 (atau disesuaikan input jika sudah ada)
-    """
     norm = normalize_text(mapel_raw)
     
     # 1. Matematika & IPA
-    if 'matematika' in norm or 'mtk' in norm or 'm07' in norm or 'ipa' in norm or 'm08' in norm:
+    if any(k in norm for k in ['matematika', 'mtk', 'm07', 'ipa', 'm08']):
         return [2, 2, 1]
-    
     # 2. Bahasa Indonesia
-    elif 'indonesia' in norm or 'bin' in norm or 'm06' in norm:
+    elif any(k in norm for k in ['indonesia', 'bin', 'm06']):
         return [2, 2, 2]
-    
     # 3. IPS & Bahasa Inggris
-    elif 'ips' in norm or 'm09' in norm or 'inggris' in norm or 'big' in norm or 'm10' in norm:
+    elif any(k in norm for k in ['ips', 'm09', 'inggris', 'ing', 'big', 'm10']):
         return [2, 2]
-    
     # 4. Pendidikan Pancasila
-    elif 'pancasila' in norm or 'pp' in norm or 'pkn' in norm or 'm05' in norm:
+    elif any(k in norm for k in ['pancasila', 'pp', 'pkn', 'm05']):
         return [2, 1]
-    
-    # 5. Selain itu (PJOK, PAI, Seni, Informatika, dll)
+    # 5. Lainnya
     else:
-        # Jika di excel sudah ditulis spesifik (misal: 2, 1 atau 3)
         if not pd.isna(val_raw):
             val_str = str(val_raw).strip()
             if ',' in val_str or ';' in val_str:
@@ -69,31 +56,31 @@ def get_slot_structure_by_mapel(mapel_raw, val_raw):
 
 def get_mapel_info(mapel_raw):
     norm = normalize_text(mapel_raw)
-    if 'inggris' in norm or 'big' in norm or 'm10' in norm:
+    if any(k in norm for k in ['inggris', 'ing', 'big', 'm10']):
         return 'M10', 'BIG'
-    elif 'pancasila' in norm or 'pp' in norm or 'pkn' in norm or 'm05' in norm:
+    elif any(k in norm for k in ['pancasila', 'pp', 'pkn', 'm05']):
         return 'M05', 'PP'
-    elif 'agama' in norm or 'islam' in norm or 'pai' in norm or 'm01' in norm:
+    elif any(k in norm for k in ['agama', 'islam', 'pai', 'm01']):
         return 'M01', 'PAI'
-    elif 'indonesia' in norm or 'bin' in norm or 'm06' in norm:
+    elif any(k in norm for k in ['indonesia', 'bin', 'm06']):
         return 'M06', 'BIN'
-    elif 'matematika' in norm or 'mtk' in norm or 'm07' in norm:
+    elif any(k in norm for k in ['matematika', 'mtk', 'm07']):
         return 'M07', 'MTK'
-    elif 'ipa' in norm or 'm08' in norm:
+    elif any(k in norm for k in ['ipa', 'm08']):
         return 'M08', 'IPA'
-    elif 'ips' in norm or 'm09' in norm:
+    elif any(k in norm for k in ['ips', 'm09']):
         return 'M09', 'IPS'
-    elif 'jasmani' in norm or 'pjok' in norm or 'm11' in norm:
+    elif any(k in norm for k in ['jasmani', 'pjok', 'm11']):
         return 'M11', 'PJOK'
-    elif 'informatika' in norm or 'inf' in norm or 'm12' in norm:
+    elif any(k in norm for k in ['informatika', 'inf', 'm12']):
         return 'M12', 'INF'
-    elif 'seni' in norm or 'snb' in norm or 'm13' in norm:
+    elif any(k in norm for k in ['seni', 'snb', 'm13']):
         return 'M13', 'SNB'
-    elif 'prakarya' in norm or 'prk' in norm or 'm14' in norm:
+    elif any(k in norm for k in ['prakarya', 'prk', 'm14']):
         return 'M14', 'PRK'
-    elif 'jawa' in norm or 'bjw' in norm or 'm15' in norm:
+    elif any(k in norm for k in ['jawa', 'bjw', 'm15']):
         return 'M15', 'BJW'
-    elif 'konseling' in norm or 'bk' in norm or 'm16' in norm:
+    elif any(k in norm for k in ['konseling', 'bk', 'm16']):
         return 'M16', 'BK'
     else:
         return 'MXX', str(mapel_raw).strip()[:4].upper()
@@ -131,7 +118,7 @@ def generate_schedule(excel_source):
     if not slot_col:
         slot_col = gm_df.columns[-1]
 
-    # FILTER SLOT KBM DARI SHEET SLOT
+    # FILTER SLOT KBM
     jenis_col = [c for c in slot_df.columns if 'jenis' in c.lower() or 'keterangan' in c.lower()]
     if jenis_col:
         j_name = jenis_col[0]
@@ -143,20 +130,19 @@ def generate_schedule(excel_source):
     days = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat']
     slots_by_day = {d: kbm_slots[kbm_slots['Hari'] == d]['Jam'].tolist() for d in days}
 
-    # PEMBAGIAN BLOCK JP OTOMATIS BERDASARKAN RULES USER
     gm_df['Slot_List'] = gm_df.apply(lambda row: get_slot_structure_by_mapel(row['Mapel'], row[slot_col]), axis=1)
     gm_df['ID Guru'] = gm_df['ID Guru'].astype(str).str.strip()
     records = gm_df.to_dict(orient='records')
 
-    # PRIORITY ORDER
+    # PRIORITAS B. INGGRIS & PJOK DILAYANI TERLEBIH DAHULU
     def get_priority(item):
         norm = normalize_text(item['Mapel'])
-        if 'pjok' in norm or 'jasmani' in norm or 'm11' in norm:
-            return 0  # PJOK Duluan
-        elif 'matematika' in norm or 'mtk' in norm or 'm07' in norm:
-            return 1  # MTK Kedua
-        elif 'inggris' in norm or 'big' in norm or 'm10' in norm:
-            return 2  # B. Inggris Ketiga
+        if any(k in norm for k in ['inggris', 'ing', 'big', 'm10']):
+            return 0  # B. Inggris Prioritas Utama
+        elif any(k in norm for k in ['pjok', 'jasmani', 'm11']):
+            return 1  # PJOK
+        elif any(k in norm for k in ['matematika', 'mtk', 'm07']):
+            return 2  # MTK
         return 3
 
     records.sort(key=get_priority)
@@ -172,49 +158,52 @@ def generate_schedule(excel_source):
         slot_blocks = item.get('Slot_List', [])
         norm_mapel = normalize_text(mapel)
 
-        is_pjok = 'pjok' in norm_mapel or 'jasmani' in norm_mapel or 'm11' in norm_mapel
-        is_mtk = 'matematika' in norm_mapel or 'mtk' in norm_mapel or 'm07' in norm_mapel
+        is_inggris = any(k in norm_mapel for k in ['inggris', 'ing', 'big', 'm10'])
+        is_pjok = any(k in norm_mapel for k in ['pjok', 'jasmani', 'm11'])
+        is_mtk = any(k in norm_mapel for k in ['matematika', 'mtk', 'm07'])
 
         status_g = str(guru_status.get(guru_id, '')).strip().upper()
         is_gtt = 'GTT' in status_g
         mgmp_day = str(mgmp_days.get(guru_id, '')).strip()
 
-        # Pelacakan agar 1 mapel tidak masuk di hari yang sama jika dipecah jadi beberapa blok
-        days_assigned_for_this_item = set()
+        days_assigned = set()
 
         for block_size in slot_blocks:
             placed = False
 
-            for mode in ['strict', 'moderate', 'emergency']:
+            # Jika Bahasa Inggris, utamakan pencarian di Jumat, Senin, Rabu, Kamis terlebih dahulu
+            search_days = ['Jumat', 'Senin', 'Rabu', 'Kamis', 'Selasa'] if is_inggris else days
+
+            # Peningkatan Mode Toleransi agar Bahasa Inggris Pas
+            for mode in ['strict', 'moderate', 'flexible', 'emergency']:
                 if placed:
                     break
 
-                for day in days:
+                for day in search_days:
                     if placed:
                         break
 
-                    # Cegah mapel yang sama masuk lebih dari 1 kali di hari yang sama (misal MTK 2,2,1 tersebar di 3 hari berbeda)
-                    if day in days_assigned_for_this_item and mode != 'emergency':
+                    # Jangan masukan 1 mapel di hari yang sama kecuali di mode emergency
+                    if day in days_assigned and mode not in ['flexible', 'emergency']:
                         continue
 
-                    is_mgmp_today = (mgmp_day.lower() == day.lower())
+                    is_mgmp_today = (mgmp_day.lower() == day.lower()) or (is_inggris and day.lower() == 'selasa')
 
                     # Cek MGMP Guru GTT vs Non-GTT
-                    if is_mgmp_today and mode != 'emergency':
-                        if is_gtt:
+                    if is_mgmp_today and mode not in ['flexible', 'emergency']:
+                        if is_gtt or is_inggris:
                             continue
 
                     available_jams = slots_by_day.get(day, [])
 
                     for jam in available_jams:
-                        # Priority Jam Pagi untuk PJOK dan Blok Pertama Matematika
                         if is_pjok and mode in ['strict', 'moderate'] and jam != 1:
                             continue
                         if is_mtk and block_size == 2 and mode in ['strict', 'moderate'] and jam > 2:
                             continue
 
                         # Batasan MGMP Non-GTT (Max Jam ke-3)
-                        if is_mgmp_today and not is_gtt:
+                        if is_mgmp_today and not is_gtt and mode not in ['flexible', 'emergency']:
                             if (jam + block_size - 1) > 3:
                                 continue
 
@@ -245,7 +234,7 @@ def generate_schedule(excel_source):
                                     'kelas': kelas
                                 })
                             placed = True
-                            days_assigned_for_this_item.add(day)
+                            days_assigned.add(day)
                             break
 
             if not placed:
@@ -328,7 +317,7 @@ with t4:
         st.warning(f"Terdapat {len(unassigned)} item belum terjadwal:")
         st.dataframe(pd.DataFrame(unassigned), use_container_width=True)
     else:
-        st.success("🎉 Seluruh pembagian JP mapel (2,2,1 / 2,2,2 / 2,2 / 2,1 / 3) berhasil terplot sempurna ke hari-hari yang berbeda!")
+        st.success("🎉 Berhasil! Seluruh mapel Bahasa Inggris terisi penuh di hari selain Selasa!")
 
 # DOWNLOAD EXCEL
 buffer = io.BytesIO()
