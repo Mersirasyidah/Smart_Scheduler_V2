@@ -2,7 +2,7 @@ from database import DatabaseLoader
 from scheduler_core.solver import SchedulerSolver
 from scheduler_core.exporter import ScheduleExporter
 
-class SmartSchedulerEngine:
+class Scheduler:  # <-- Gunakan nama 'Scheduler' agar cocok dengan import di pages
     def __init__(self, excel_path="database_scheduler.xlsx"):
         self.db_loader = DatabaseLoader(excel_path)
         
@@ -20,9 +20,3 @@ class SmartSchedulerEngine:
             'class_matrix': class_matrix,
             'unassigned': unassigned
         }
-
-if __name__ == "__main__":
-    engine = SmartSchedulerEngine()
-    results = engine.run()
-    print("Jadwal Berhasil Dibuat!")
-    print(f"Gagal Dijadwalkan: {len(results['unassigned'])} item")
