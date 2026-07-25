@@ -6,7 +6,7 @@ class ScheduleConstraints:
             self.mgmp_days = dict(zip(guru_df['ID Guru'], guru_df['Hari MGMP'].fillna('')))
         else:
             self.mgmp_days = {}
-        
+
     def is_teacher_available(self, guru_id, hari):
         """Memastikan guru tidak mengajar di hari MGMP-nya."""
         mgmp_day = self.mgmp_days.get(guru_id, '')
@@ -25,6 +25,26 @@ class ScheduleConstraints:
                     if entry['guru_id'] == guru_id or entry['kelas'] == kelas:
                         return False
         return True
+
+    def is_daily_limit_exceeded(self, schedule_board, hari, guru_id, kelas, mapel, block_size):
+        """
+        VALIDASI:
+        Maksimal mengajar mapel yang sama di kelas yang sama adalah 2 JP per hari,
+        KECUALI jika block_size / total JP mapel tersebut = 3.
+        """
+        if block_size == 3:
+            return False
+
+        existing_jp = 0
+        for (h, _), entries in schedule_board.items():
+            if h == hari:
+                for entry in entries:
+                    if entry['guru_id'] == guru_id and entry['kelas'] == kelas and entry['mapel'] == mapel:
+                        existing_jp += 1
+
+        if (existing_jp + block_size) > 2:
+            return True
+        return False
 
     def is_pjok_valid(self, mapel, kelas, hari, jam_start):
         """
@@ -49,5 +69,6 @@ class ScheduleConstraints:
             return jam_start == 4
             
         return True
+
 
 ConstraintManager = ScheduleConstraints
