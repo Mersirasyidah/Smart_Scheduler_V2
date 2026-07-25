@@ -1,45 +1,26 @@
-import pandas as pd  # 👈 Pastikan baris ini ada di paling atas!
+class ScheduleConstraints:
+    def __init__(self, guru_df, slot_df):
+        # Map Hari MGMP per ID Guru
+        self.mgmp_days = dict(zip(guru_df['ID Guru'], guru_df['Hari MGMP'].fillna('')))
+        
+    def is_teacher_available(self, guru_id, hari):
+        """Memastikan guru tidak mengajar di hari MGMP-nya."""
+        mgmp_day = self.mgmp_days.get(guru_id, '')
+        if str(mgmp_day).strip().lower() == str(hari).strip().lower():
+            return False
+        return True
 
-
-class ConstraintManager:
-
-  def __init__(self, data):
-    self.guru_df = data["guru"]
-    self.mapel_df = data["mapel"]
-    self.mengajar_df = data["guru_mengajar"]
-    self.hari_jam_df = data["hari_jam"]
-
-  def get_teacher_mgmp_days(self):
-    """Mendapatkan pemetaan hari libur/MGMP untuk setiap Guru."""
-    mgmp_dict = {}
-    for _, row in self.guru_df.iterrows():
-      if pd.notna(row["Hari MGMP"]):
-        mgmp_dict[str(row["ID Guru"]).strip()] = str(
-            row["Hari MGMP"]
-        ).strip()
-    return mgmp_dict
-
-  def get_lesson_splits(self):
-    """Memproses kolom Pembagian (misal: '2,2,1') menjadi daftar durasi sesi."""
-    assignments = []
-    for idx, row in self.mengajar_df.iterrows():
-      splits_str = str(row["Pembagian"])
-      try:
-        splits = [int(s.strip()) for s in splits_str.split(",")]
-      except ValueError:
-        splits = [int(row["JP"])]
-
-      assignments.append({
-          "id": idx,
-          "guru_id": str(row["ID Guru"]).strip(),
-          "guru_nama": row["Nama Guru"],
-          "mapel": row["Mapel"],
-          "kelas": row["Kelas"],
-          "total_jp": row["JP"],
-          "splits": splits,
-      })
-    return assignments
-
-
-# Alias untuk kompartibilitas jika dipanggil dengan nama ConstraintBuilder
-ConstraintBuilder = ConstraintManager
+    def is_slot_free(self, schedule_board, hari, jam_start, block_size, guru_id, kelas):
+        """Memastikan guru dan kelas tidak bentrok pada rentang jam berturut-turut."""
+        for offset in range(block_size):
+            jam_check = jam_start + offset
+            slot_key = (hari, jam_check)
+            
+            # Cek jika slot sudah diisi oleh guru atau kelas yang sama
+            if slot_key in schedule_board:
+                for entry in schedule_board[slot_key]:
+                    if entry['guru_id'] == guru_id:
+                        return False  # Bentrok Guru
+                    if entry['kelas'] == kelas:
+                        return False  # Bentrok Kelas
+        return True
