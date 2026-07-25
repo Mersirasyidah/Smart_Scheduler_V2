@@ -4,6 +4,32 @@ import io
 import streamlit as st
 import pandas as pd
 
+# 1. TAMBAHKAN ROOT DIRECTORY KE PYTHON PATH (SOLUSI IMPORT ERROR)
+# Kode ini memaksa Python untuk melihat file di folder utama (root project)
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+# 2. SEKARANG LAKUKAN IMPORT SCHEDULER ENGINE
+try:
+    from scheduler_engine import Scheduler
+except ImportError as e:
+    st.error(f"⚠️ Gagal mengimpor modul `scheduler_engine`: {e}")
+    st.info(f"System Path saat ini: {sys.path}")
+    st.stop()
+
+# --- SISA KODE KAU DILANJUTKAN DI SINI ---
+st.set_page_config(
+    page_title="AI Scheduler V2",
+    page_icon="🤖",
+    layout="wide"
+)
+
+st.title("🤖 AI Smart Scheduler V2")
+st.markdown("Generator Jadwal Otomatis berbasis Constraint-Solver.")
+
+# ... (sisa kode dashboard Streamlit kamu) ...
+
 # 1. Mengatasi ImportError saat di-deploy ke Streamlit Cloud
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
