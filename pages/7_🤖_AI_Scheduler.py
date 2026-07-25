@@ -15,9 +15,9 @@ target_file_path = st.sidebar.text_input("Atau ketik jalur file lokal:", value="
 
 input_data = uploaded_file if uploaded_file is not None else target_file_path
 
-# --- MAPPING KODE & SINGKATAN MAPEL (DIOPERKAYA) ---
+# --- MAPPING KODE & SINGKATAN MAPEL ---
 MAPEL_TO_KODE = {
-    'pendidikan agama islam': 'M01', 'pAI': 'M01',
+    'pendidikan agama islam': 'M01', 'pai': 'M01',
     'pendidikan agama hindu': 'M02',
     'pendidikan agama katholik': 'M03',
     'pendidikan agama kristen': 'M04',
@@ -26,7 +26,7 @@ MAPEL_TO_KODE = {
     'matematika': 'M07', 'mtk': 'M07',
     'ilmu pengetahuan alam': 'M08', 'ipa': 'M08',
     'ilmu pengetahuan sosial': 'M09', 'ips': 'M09',
-    'bahasa inggris': 'M10', 'b. inggris': 'M10', 'b.inggris': 'M10', 'big': 'M10', 'm07': 'M10', # M07 dialiaskan juga jika ada bentrok kode
+    'bahasa inggris': 'M10', 'b. inggris': 'M10', 'b.inggris': 'M10', 'big': 'M10',
     'pendidikan jasmani olahraga dan kesehatan': 'M11', 'pjok': 'M11',
     'informatika': 'M12', 'inf': 'M12',
     'seni budaya': 'M13', 'snb': 'M13',
@@ -65,12 +65,9 @@ def parse_slot_list(val):
 
 def get_mapel_info(mapel_raw):
     m_str = str(mapel_raw).strip().lower()
-    
-    # Cari di dictionary
     kode = MAPEL_TO_KODE.get(m_str, None)
     singkatan = MAPEL_SHORT.get(m_str, None)
     
-    # Fallback jika tidak terdaftar
     if not kode:
         if 'inggris' in m_str:
             kode, singkatan = 'M10', 'BIG'
@@ -85,7 +82,6 @@ def get_mapel_info(mapel_raw):
         
     return kode, singkatan
 
-# --- FUNGSI AMAN MEMBACA SHEET EXCEL ---
 def get_sheet_df(xls, target_name):
     target_clean = re.sub(r'[^a-zA-Z0-9]', '', str(target_name)).lower()
     for sheet in xls.sheet_names:
@@ -111,7 +107,6 @@ def generate_schedule(excel_source):
     slot_df = get_sheet_df(xls, 'Slot')
     gm_df = get_sheet_df(xls, 'Guru_Mengajar')
 
-    # Data MGMP dan Status Guru
     mgmp_days = {}
     guru_status = {}
     if 'ID Guru' in guru_df.columns:
@@ -136,6 +131,7 @@ def generate_schedule(excel_source):
     gm_df['Slot_List'] = gm_df[slot_col].apply(parse_slot_list)
     records = gm_df.to_dict(orient='records')
 
+    # Prioritaskan PJOK & Mapel durasi JP besar
     def get_priority(item):
         mapel = str(item['Mapel']).lower()
         is_pjok = 'jasmani' in mapel or 'olahraga' in mapel or 'pjok' in mapel or 'm11' in mapel
@@ -159,36 +155,34 @@ def generate_schedule(excel_source):
                 if placed:
                     break
                 for day in days:
-                    # Aturan MGMP & Status Guru
+                    # 1. ATURAN PISAH HARI (Max 2 JP/hari untuk mapel yang sama di kelas yang sama)
+                    existing_jp_in_day = 0
+                    for (h, _), entries in schedule_board.items():
+                        if h == day:
+                            for e in entries:
+                                if e['kelas'] == kelas and str(e['mapel']).strip().lower() == str(mapel).strip().lower():
+                                    existing_jp_in_day += 1
+
+                    # Jika di hari tersebut sudah ada jam untuk mapel & kelas ini, lompat ke hari lain
+                    if existing_jp_in_day > 0:
+                        continue
+
+                    # 2. ATURAN HARI MGMP & STATUS GURU
                     mgmp_day = str(mgmp_days.get(guru_id, '')).strip().lower()
                     status = str(guru_status.get(guru_id, '')).strip().upper()
-                    
                     is_mgmp_day = (mgmp_day == day.lower())
 
-                    # Guru GTT: Libur Penuh di Hari MGMP
                     if is_mgmp_day and status == 'GTT':
                         continue
 
-                    # Max 2 JP/hari di kelas sama (kecuali mapel bertotal 3 JP)
-                    if block_size != 3:
-                        existing_jp = 0
-                        for (h, _), entries in schedule_board.items():
-                            if h == day:
-                                for e in entries:
-                                    if e['guru_id'] == guru_id and e['kelas'] == kelas and e['mapel'] == mapel:
-                                        existing_jp += 1
-                        if (existing_jp + block_size) > 2:
-                            continue
-
                     available_jams = slots_by_day.get(day, [])
                     for jam in available_jams:
-                        # Guru Non-GTT: Boleh mengajar di Hari MGMP HANYA Jam 1-3
                         if is_mgmp_day and status != 'GTT':
                             if (jam + block_size - 1) > 3:
                                 continue
 
                         if all((jam + offset) in available_jams for offset in range(block_size)):
-                            # Validasi Jam PJOK
+                            # Validasi PJOK
                             is_pjok = 'jasmani' in str(mapel).lower() or 'olahraga' in str(mapel).lower() or 'pjok' in str(mapel).lower()
                             if is_pjok and strict_pjok:
                                 tingkat = str(kelas)[0] if str(kelas)[0].isdigit() else ''
@@ -200,7 +194,7 @@ def generate_schedule(excel_source):
                                     if jam != 4:
                                         continue
 
-                            # Cek Bentrok
+                            # Cek Bentrok Guru / Kelas
                             bentrok = False
                             for offset in range(block_size):
                                 slot_key = (day, jam + offset)
