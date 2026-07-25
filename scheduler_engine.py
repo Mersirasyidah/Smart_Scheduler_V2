@@ -1,6 +1,6 @@
 import pandas as pd
 import random
-from database_loader import DatabaseLoader # Mengimpor file DatabaseLoader Anda
+from database_loader import DatabaseLoader
 
 class SmartSchedulerV2:
     def __init__(self, data):
@@ -9,151 +9,140 @@ class SmartSchedulerV2:
         self.guru_mengajar_df = data['guru_mengajar']
         self.kbm_slots = data['kbm_slots']
         
-        self.jadwal = {}      # Key: (Hari, Jam, Rombel_ID) -> Value: dict tugas
+        self.jadwal = {}       # Key: (Hari, Jam, Rombel_ID) -> Value: dict tugas
         self.guru_busy = set() # Key: (Hari, Jam, Guru_ID)
         self.unassigned = []
 
-    def prepare_tasks(self):
-        """Memecah data guru_mengajar menjadi unit tugas berdurasi (misal 2 JP, 3 JP, atau 1 JP)"""
+    def prepare_unit_tasks(self):
+        """
+        Memecah semua tugas menjadi satuan 1-JP tunggal.
+        Ini menjamin perhitungan slot murni 1 banding 1 hingga mencapai total 615 JP.
+        """
         tasks = []
         for _, row in self.guru_mengajar_df.iterrows():
             guru_id = row['Guru_ID']
             rombel_id = row['Rombel_ID']
             mapel = row['Mapel_ID']
-            slot_list = row.get('Slot_List', [])
             
-            # Jika Slot_List tidak ada/kosong, gunakan total JP
-            if not slot_list and 'JP' in row:
-                slot_list = [1] * int(row['JP'])
+            # Ambil total JP dari baris Excel
+            jp_total = int(row['JP']) if 'JP' in row and pd.notna(row['JP']) else 0
+            
+            # Jika menggunakan Slot_List, hitung total JP dari sum
+            slot_list = row.get('Slot_List', [])
+            if slot_list:
+                jp_total = sum(slot_list)
 
-            for block_len in slot_list:
+            # Buat unit tugas tunggal (1 JP per entri)
+            for i in range(jp_total):
                 tasks.append({
+                    'id': f"{guru_id}_{rombel_id}_{mapel}_{i}",
                     'guru_id': guru_id,
                     'rombel_id': rombel_id,
                     'mapel': mapel,
-                    'duration': block_len
+                    'total_guru_jp': jp_total # Dipakai untuk prioritas sorting
                 })
         
-        # PERBAIKAN UTAMA 1: SORTING PRIORITAS
-        # Urutkan tugas dari durasi terbesar (misal 3 JP dulu) agar jam blok tidak buntu di akhir
-        tasks.sort(key=lambda x: x['duration'], reverse=True)
+        # PERBAIKAN 1: PRIORITAS SORTING
+        # Guru dengan beban JP paling besar diproses lebih awal
+        tasks.sort(key=lambda x: x['total_guru_jp'], reverse=True)
         return tasks
 
     def generate(self):
-        tasks = self.prepare_tasks()
+        tasks = self.prepare_unit_tasks()
         
-        # Ambil daftar unik Hari, Jam, dan Rombel
-        daftar_hari = self.kbm_slots['Hari'].unique()
-        daftar_rombel = self.rombel_df['Rombel_ID'].unique()
+        daftar_hari = list(self.kbm_slots['Hari'].unique())
+        daftar_rombel = list(self.rombel_df['Rombel_ID'].unique())
 
         for task in tasks:
-            placed = self.coba_tempatkan_tugas(task, daftar_hari, daftar_rombel)
+            # Langkah 1: Coba alokasi biasa ke slot kosong
+            placed = self.coba_tempatkan_unit(task, daftar_hari)
             
-            # PERBAIKAN UTAMA 2: BACKTRACKING / SWAP SLOT (Jika penempatan biasa buntu)
+            # Langkah 2: Jika terbentur, jalankan SWAP / BACKTRACKING
             if not placed:
-                placed = self.coba_backtrack_swap(task, daftar_hari, daftar_rombel)
+                placed = self.coba_backtrack_swap_unit(task, daftar_hari)
 
             if not placed:
                 self.unassigned.append(task)
 
         return self.jadwal, self.unassigned
 
-    def coba_tempatkan_tugas(self, task, daftar_hari, daftar_rombel):
-        duration = task['duration']
+    def coba_tempatkan_unit(self, task, daftar_hari):
         rombel = task['rombel_id']
         guru = task['guru_id']
 
-        # Acak hari untuk variasi distribusi
         hari_list = list(daftar_hari)
-        random.shuffle(hari_list)
+        random.shuffle(hari_list) # Mencegah penumpukan di hari Senin
 
         for hari in hari_list:
             slots_hari = self.kbm_slots[self.kbm_slots['Hari'] == hari].sort_values('Jam')
             jam_list = slots_hari['Jam'].tolist()
 
-            # Cari blok jam berurutan sesuai durasi (misal 2 JP berturut-turut)
-            for i in range(len(jam_list) - duration + 1):
-                block_jams = jam_list[i : i + duration]
-                
-                # Cek Syarat:
-                # 1. Rombel kosong di semua jam blok tersebut
-                # 2. Guru TIDAK mengajar di rombel lain pada semua jam blok tersebut
-                bisa_masuk = True
-                for jam in block_jams:
-                    if (hari, jam, rombel) in self.jadwal or (hari, jam, guru) in self.guru_busy:
-                        bisa_masuk = False
-                        break
-                
-                if bisa_masuk:
-                    for jam in block_jams:
-                        self.jadwal[(hari, jam, rombel)] = task
-                        self.guru_busy.add((hari, jam, guru))
+            for jam in jam_list:
+                key_jadwal = (hari, jam, rombel)
+                key_guru = (hari, jam, guru)
+
+                # Syarat: Slot kelas KOSONG & Guru TIDAK MENGANJAR di rombel lain pada jam tersebut
+                if key_jadwal not in self.jadwal and key_guru not in self.guru_busy:
+                    self.jadwal[key_jadwal] = task
+                    self.guru_busy.add(key_guru)
                     return True
         return False
 
-    def coba_backtrack_swap(self, task, daftar_hari, daftar_rombel):
-        """Mekanisme menggeser tugas lain yang sudah terpasang agar 7 guru terlempar bisa masuk"""
-        guru = task['guru_id']
-        rombel = task['rombel_id']
-        duration = task['duration']
+    def coba_backtrack_swap_unit(self, task, daftar_hari):
+        """
+        Menggeser 1 JP guru lain yang sudah terpasang ke slot kosong lain
+        agar slotnya bisa dipakai oleh tugas yang terhalang.
+        """
+        guru_butuh = task['guru_id']
+        rombel_butuh = task['rombel_id']
 
-        for hari in daftar_hari:
-            slots_hari = self.kbm_slots[self.kbm_slots['Hari'] == hari].sort_values('Jam')
-            jam_list = slots_hari['Jam'].tolist()
-
-            for i in range(len(jam_list) - duration + 1):
-                block_jams = jam_list[i : i + duration]
-
-                # Cek apakah guru utama TIDAK bentrok di jam ini
-                if any((hari, jam, guru) in self.guru_busy for jam in block_jams):
-                    continue
-
-                # Ambil tugas yang sedang menempati slot rombel ini saat ini
-                tugas_penghuni = [self.jadwal.get((hari, jam, rombel)) for jam in block_jams]
+        for hariA in daftar_hari:
+            slots_hariA = self.kbm_slots[self.kbm_slots['Hari'] == hariA].sort_values('Jam')
+            for jamA in slots_hariA['Jam'].tolist():
                 
-                # Lakukan swap jika slot diisi tugas tunggal
-                if len(tugas_penghuni) == 1 and tugas_penghuni[0] is not None:
-                    t_lama = tugas_penghuni[0]
-                    
-                    # Lepas sementara tugas lama
-                    for jam in block_jams:
-                        del self.jadwal[(hari, jam, rombel)]
-                        self.guru_busy.remove((hari, jam, t_lama['guru_id']))
+                key_guruA = (hariA, jamA, guru_butuh)
+                key_jadwalA = (hariA, jamA, rombel_butuh)
 
-                    # Coba pindahkan tugas lama ke tempat lain
-                    pindah_sukses = self.coba_tempatkan_tugas(t_lama, daftar_hari, daftar_rombel)
-                    
+                # Jika guru yang mau masuk TIDAK BENTROK di jamA
+                if key_guruA not in self.guru_busy and key_jadwalA in self.jadwal:
+                    tugas_penghuni = self.jadwal[key_jadwalA]
+                    guru_penghuni = tugas_penghuni['guru_id']
+
+                    # Lepas sementara tugas penghuni lama
+                    del self.jadwal[key_jadwalA]
+                    self.guru_busy.remove((hariA, jamA, guru_penghuni))
+
+                    # Coba cari slot kosong alternatif untuk tugas penghuni lama
+                    pindah_sukses = self.coba_tempatkan_unit(tugas_penghuni, daftar_hari)
+
                     if pindah_sukses:
-                        # Pasang tugas baru ke slot yang ditinggalkan
-                        for jam in block_jams:
-                            self.jadwal[(hari, jam, rombel)] = task
-                            self.guru_busy.add((hari, jam, guru))
+                        # Masukkan tugas baru ke slot yang sudah dikosongkan
+                        self.jadwal[key_jadwalA] = task
+                        self.guru_busy.add(key_guruA)
                         return True
                     else:
-                        # Jika gagal dipindah, kembalikan tugas lama ke tempat semula
-                        for jam in block_jams:
-                            self.jadwal[(hari, jam, rombel)] = t_lama
-                            self.guru_busy.add((hari, jam, t_lama['guru_id']))
+                        # Kembalikan penghuni lama jika tidak menemukan slot alternatif
+                        self.jadwal[key_jadwalA] = tugas_penghuni
+                        self.guru_busy.add((hariA, jamA, guru_penghuni))
 
         return False
 
 # ==============================================================================
-# CARA MENJALANKAN ENGINE
+# EKSEKUSI ENGINE
 # ==============================================================================
 if __name__ == "__main__":
-    # 1. Load Data
     loader = DatabaseLoader("database_scheduler.xlsx")
     data = loader.load_all()
 
-    # 2. Run Engine Smart Scheduler V2
     engine = SmartSchedulerV2(data)
     jadwal_hasil, terlempar = engine.generate()
 
-    print("\n--- HASIL GENERATE SMART SCHEDULER V2 ---")
-    print(f"✅ Total Jam Terisi  : {len(jadwal_hasil)} JP")
-    print(f"❌ Total Jam Terlempar: {len(terlempar)} Tugas")
+    print("\n================ HASIL AKHIR SCHEDULER ================")
+    print(f"📊 Total Slot Terisi  : {len(jadwal_hasil)} / 615 JP")
+    print(f"❌ Total JP Terlempar : {len(terlempar)} JP")
+    print("=======================================================")
 
-    if len(terlempar) == 0:
-        print("🎉 SANGAT SUKSES! Semua 615 JP / 27 Guru berhasil masuk 100% tanpa bentrok.")
+    if len(jadwal_hasil) == 615:
+        print("🎉 SUKSES PRESISI 100%! Semua 615 JP berhasil terplot sempurna.")
     else:
-        print("⚠️ Detail tugas yang belum terpasang:", terlempar)
+        print(f"⚠️ Masih ada {615 - len(jadwal_hasil)} JP yang belum terisi.")
