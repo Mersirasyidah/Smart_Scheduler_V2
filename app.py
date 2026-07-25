@@ -270,15 +270,23 @@ def generate_schedule(excel_source):
 
     return pd.DataFrame(rows), unassigned
 
+
+# --- INISIALISASI SESSION STATE ---
+if 'df_schedule' not in st.session_state:
+    st.session_state['df_schedule'] = pd.DataFrame()
+if 'unassigned' not in st.session_state:
+    st.session_state['unassigned'] = []
+
 # --- TOMBOL RUN JADWAL & PROSES ---
 btn_generate = st.button("🚀 Generate Jadwal Sekarang", type="primary", use_container_width=False)
 
-if btn_generate or 'df_schedule' not in st.session_state:
+if btn_generate:
     with st.spinner("Sedang memetakan seluruh guru ke dalam slot kelas..."):
         try:
             df_sched, unassigned_list = generate_schedule(input_data)
             st.session_state['df_schedule'] = df_sched
             st.session_state['unassigned'] = unassigned_list
+            st.rerun()
         except Exception as e:
             st.error(f"Gagal membaca/memproses file Excel: {e}")
             st.stop()
@@ -344,17 +352,18 @@ with tab_unassigned:
 
 # --- DOWNLOAD BUTTON ---
 st.markdown("---")
-buffer = io.BytesIO()
-with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-    matrix_nama.to_excel(writer, sheet_name='Matriks_Nama_Guru')
-    matrix_kode.to_excel(writer, sheet_name='Matriks_Kode_Mapel')
-    df_schedule.to_excel(writer, sheet_name='Master_Detail', index=False)
-    if unassigned:
-        pd.DataFrame(unassigned).to_excel(writer, sheet_name='Unassigned', index=False)
+if not df_schedule.empty:
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        matrix_nama.to_excel(writer, sheet_name='Matriks_Nama_Guru')
+        matrix_kode.to_excel(writer, sheet_name='Matriks_Kode_Mapel')
+        df_schedule.to_excel(writer, sheet_name='Master_Detail', index=False)
+        if unassigned:
+            pd.DataFrame(unassigned).to_excel(writer, sheet_name='Unassigned', index=False)
 
-st.download_button(
-    label="📥 Download Hasil Pemetaan ke Excel",
-    data=buffer.getvalue(),
-    file_name="Hasil_Pemetaan_Jadwal.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+    st.download_button(
+        label="📥 Download Hasil Pemetaan ke Excel",
+        data=buffer.getvalue(),
+        file_name="Hasil_Pemetaan_Jadwal.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
