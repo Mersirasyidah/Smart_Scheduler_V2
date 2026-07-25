@@ -30,19 +30,19 @@ def clean_first_name(nama_full):
 def get_slot_structure_by_mapel(mapel_raw, val_raw):
     norm = normalize_text(mapel_raw)
     
-    # 1. Matematika & IPA
+    # 1. Matematika & IPA -> 2, 2, 1
     if any(k in norm for k in ['matematika', 'mtk', 'm07', 'ipa', 'm08']):
         return [2, 2, 1]
-    # 2. Bahasa Indonesia
+    # 2. Bahasa Indonesia -> 2, 2, 2
     elif any(k in norm for k in ['indonesia', 'bin', 'm06']):
         return [2, 2, 2]
-    # 3. IPS & Bahasa Inggris
+    # 3. IPS & Bahasa Inggris -> 2, 2
     elif any(k in norm for k in ['ips', 'm09', 'inggris', 'ing', 'big', 'm10']):
         return [2, 2]
-    # 4. Pendidikan Pancasila
+    # 4. Pendidikan Pancasila -> 2, 1
     elif any(k in norm for k in ['pancasila', 'pp', 'pkn', 'm05']):
         return [2, 1]
-    # 5. Lainnya
+    # 5. Lainnya -> 3
     else:
         if not pd.isna(val_raw):
             val_str = str(val_raw).strip()
@@ -118,17 +118,24 @@ def generate_schedule(excel_source):
     if not slot_col:
         slot_col = gm_df.columns[-1]
 
-    # FILTER SLOT KBM
+    # FILTER SLOT KBM (Memastikan Jam ke-2 Senin tidak terlewatkan)
+    slot_df['Jam'] = pd.to_numeric(slot_df['Jam'], errors='coerce')
+    slot_df = slot_df.dropna(subset=['Jam'])
+    slot_df['Jam'] = slot_df['Jam'].astype(int)
+
     jenis_col = [c for c in slot_df.columns if 'jenis' in c.lower() or 'keterangan' in c.lower()]
     if jenis_col:
         j_name = jenis_col[0]
-        kbm_slots = slot_df[~slot_df[j_name].astype(str).str.upper().str.contains('ISTIRAHAT|UPACARA|PEMBIASAAN|SHOLAT')].dropna(subset=['Jam']).copy()
+        # Hanya buang yang bertuliskan Upacara/Istirahat/Sholat/Pembiasaan
+        kbm_slots = slot_df[~slot_df[j_name].astype(str).str.upper().str.contains('ISTIRAHAT|UPACARA|PEMBIASAAN|SHOLAT')].copy()
     else:
-        kbm_slots = slot_df.dropna(subset=['Jam']).copy()
+        kbm_slots = slot_df.copy()
 
-    kbm_slots['Jam'] = kbm_slots['Jam'].astype(int)
     days = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat']
-    slots_by_day = {d: kbm_slots[kbm_slots['Hari'] == d]['Jam'].tolist() for d in days}
+    slots_by_day = {}
+    for d in days:
+        jams = kbm_slots[kbm_slots['Hari'].astype(str).str.strip().str.capitalize() == d]['Jam'].tolist()
+        slots_by_day[d] = sorted(list(set(jams)))
 
     gm_df['Slot_List'] = gm_df.apply(lambda row: get_slot_structure_by_mapel(row['Mapel'], row[slot_col]), axis=1)
     gm_df['ID Guru'] = gm_df['ID Guru'].astype(str).str.strip()
@@ -138,11 +145,11 @@ def generate_schedule(excel_source):
     def get_priority(item):
         norm = normalize_text(item['Mapel'])
         if any(k in norm for k in ['inggris', 'ing', 'big', 'm10']):
-            return 0  # B. Inggris Prioritas Utama
+            return 0
         elif any(k in norm for k in ['pjok', 'jasmani', 'm11']):
-            return 1  # PJOK
+            return 1
         elif any(k in norm for k in ['matematika', 'mtk', 'm07']):
-            return 2  # MTK
+            return 2
         return 3
 
     records.sort(key=get_priority)
@@ -171,10 +178,8 @@ def generate_schedule(excel_source):
         for block_size in slot_blocks:
             placed = False
 
-            # Jika Bahasa Inggris, utamakan pencarian di Jumat, Senin, Rabu, Kamis terlebih dahulu
             search_days = ['Jumat', 'Senin', 'Rabu', 'Kamis', 'Selasa'] if is_inggris else days
 
-            # Peningkatan Mode Toleransi agar Bahasa Inggris Pas
             for mode in ['strict', 'moderate', 'flexible', 'emergency']:
                 if placed:
                     break
@@ -183,13 +188,11 @@ def generate_schedule(excel_source):
                     if placed:
                         break
 
-                    # Jangan masukan 1 mapel di hari yang sama kecuali di mode emergency
                     if day in days_assigned and mode not in ['flexible', 'emergency']:
                         continue
 
                     is_mgmp_today = (mgmp_day.lower() == day.lower()) or (is_inggris and day.lower() == 'selasa')
 
-                    # Cek MGMP Guru GTT vs Non-GTT
                     if is_mgmp_today and mode not in ['flexible', 'emergency']:
                         if is_gtt or is_inggris:
                             continue
@@ -202,7 +205,6 @@ def generate_schedule(excel_source):
                         if is_mtk and block_size == 2 and mode in ['strict', 'moderate'] and jam > 2:
                             continue
 
-                        # Batasan MGMP Non-GTT (Max Jam ke-3)
                         if is_mgmp_today and not is_gtt and mode not in ['flexible', 'emergency']:
                             if (jam + block_size - 1) > 3:
                                 continue
@@ -210,7 +212,6 @@ def generate_schedule(excel_source):
                         if not all((jam + offset) in available_jams for offset in range(block_size)):
                             continue
 
-                        # Cek Bentrok Guru / Kelas
                         bentrok = False
                         for offset in range(block_size):
                             slot_key = (day, jam + offset)
@@ -317,7 +318,7 @@ with t4:
         st.warning(f"Terdapat {len(unassigned)} item belum terjadwal:")
         st.dataframe(pd.DataFrame(unassigned), use_container_width=True)
     else:
-        st.success("🎉 Berhasil! Seluruh mapel Bahasa Inggris terisi penuh di hari selain Selasa!")
+        st.success("🎉 Berhasil! Jam ke-2 Senin beserta seluruh jam KBM terisi dengan sempurna!")
 
 # DOWNLOAD EXCEL
 buffer = io.BytesIO()
