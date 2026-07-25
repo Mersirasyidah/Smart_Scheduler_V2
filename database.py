@@ -26,11 +26,18 @@ class DatabaseLoader:
 
         self.guru_mengajar_df['Slot_List'] = self.guru_mengajar_df['Slot'].apply(parse_slot_str)
         
-        # Filter hanya slot jam pelajaran KBM (abaikan Upacara & Istirahat)
+        # PERBAIKAN UTAMA: Filter jenis slot 'PEMBELAJARAN' atau 'KBM' & pastikan Jam tidak kosong (bukan Istirahat/Upacara)
         if 'Jenis' in self.slot_df.columns:
-            self.kbm_slots = self.slot_df[self.slot_df['Jenis'].astype(str).str.upper() == 'KBM'].copy()
+            valid_types = ['PEMBELAJARAN', 'KBM']
+            self.kbm_slots = self.slot_df[
+                self.slot_df['Jenis'].astype(str).str.strip().str.upper().isin(valid_types)
+            ].copy()
         else:
             self.kbm_slots = self.slot_df.copy()
+
+        # Pastikan kolom Jam berupa integer dan hapus nilai NaN (seperti jam Istirahat)
+        self.kbm_slots = self.kbm_slots.dropna(subset=['Jam'])
+        self.kbm_slots['Jam'] = self.kbm_slots['Jam'].astype(int)
 
         return {
             'guru': self.guru_df,
@@ -41,10 +48,10 @@ class DatabaseLoader:
             'kbm_slots': self.kbm_slots
         }
 
-    # Alias untuk kompatibilitas jika ada kode lama yang memanggil load_data()
+    # Alias untuk kompatibilitas
     load_data = load_all
 
 if __name__ == "__main__":
     db = DatabaseLoader()
     data = db.load_all()
-    print("Database berhasil dimuat!")
+    print(f"✅ Slot Pembelajaran ditemukan: {len(data['kbm_slots'])} slot")
