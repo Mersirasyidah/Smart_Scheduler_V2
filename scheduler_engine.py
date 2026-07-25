@@ -13,47 +13,50 @@ class Scheduler:
         self.solver_instance = None
 
     def generate(self, timeout=120):
-        # Coba beberapa pola inisialisasi SchedulerSolver
+        # 1. Menentukan parameter days & max_hours_per_day secara otomatis dari DataFrame slot
+        days = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat']
+        max_hours = 8
+
+        if self.slot is not None and not self.slot.empty:
+            # Ambil daftar hari unik dari slot jika ada kolom 'Hari'
+            if 'Hari' in self.slot.columns:
+                days = self.slot['Hari'].dropna().unique().tolist()
+            
+            # Ambil max jam per hari dari slot jika ada kolom 'Jam_Ke' atau 'Jam'
+            if 'Jam_Ke' in self.slot.columns:
+                max_hours = int(self.slot['Jam_Ke'].max())
+            elif 'Jam' in self.slot.columns:
+                max_hours = int(self.slot['Jam'].max())
+
+        # 2. Inisialisasi SchedulerSolver dengan 3 argumen wajib
         init_errors = []
 
-        # Opsi 1: Passing 5 Dataframe langsung sebagai argumen posisi
+        # Percobaan A: Passing self, days, max_hours_per_day
         try:
-            self.solver_instance = SchedulerSolver(
-                self.guru, 
-                self.rombel, 
-                self.mengajar, 
-                self.mapel, 
-                self.slot
-            )
+            self.solver_instance = SchedulerSolver(self, days, max_hours)
         except Exception as e1:
-            init_errors.append(f"Percobaan 1 (Positional Args) Gagal: {e1}")
+            init_errors.append(f"Percobaan A (Self, Days, MaxHours) Gagal: {e1}")
             
-            # Opsi 2: Passing dict data
+            # Percobaan B: Passing data dict/tuple jika SchedulerSolver butuh data langsung
             try:
-                self.solver_instance = SchedulerSolver(data={
+                data_dict = {
                     "guru": self.guru,
                     "rombel": self.rombel,
                     "mengajar": self.mengajar,
                     "mapel": self.mapel,
                     "slot": self.slot
-                })
+                }
+                self.solver_instance = SchedulerSolver(data_dict, days, max_hours)
             except Exception as e2:
-                init_errors.append(f"Percobaan 2 (Dict Arg) Gagal: {e2}")
-                
-                # Opsi 3: Passing self
-                try:
-                    self.solver_instance = SchedulerSolver(self)
-                except Exception as e3:
-                    init_errors.append(f"Percobaan 3 (Self Arg) Gagal: {e3}")
+                init_errors.append(f"Percobaan B (DataDict, Days, MaxHours) Gagal: {e2}")
 
-        # Jika semua opsi inisialisasi gagal, tampilkan detail error di Streamlit
         if self.solver_instance is None:
             st.error("❌ Detail Error Inisialisasi SchedulerSolver:")
             for err in init_errors:
                 st.code(err)
             return pd.DataFrame(), pd.DataFrame()
 
-        # Jalankan solver
+        # 3. Jalankan solver
         try:
             is_success = self.solver_instance.run_solver(timeout_seconds=timeout)
         except Exception as e:
