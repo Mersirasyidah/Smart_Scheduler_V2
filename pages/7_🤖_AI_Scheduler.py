@@ -23,14 +23,20 @@ def load_data_from_database():
                 st.session_state["guru_df"] = pd.read_sql_query("SELECT * FROM guru", conn)
                 st.session_state["rombel_df"] = pd.read_sql_query("SELECT * FROM rombel", conn)
                 
-                # Coba baca tabel mengajar atau guru_mengajar
+                # Membaca tabel guru_mengajar / mengajar
                 try:
-                    st.session_state["mengajar_df"] = pd.read_sql_query("SELECT * FROM mengajar", conn)
-                except Exception:
                     st.session_state["mengajar_df"] = pd.read_sql_query("SELECT * FROM guru_mengajar", conn)
+                except Exception:
+                    st.session_state["mengajar_df"] = pd.read_sql_query("SELECT * FROM mengajar", conn)
                     
                 st.session_state["mapel_df"] = pd.read_sql_query("SELECT * FROM mapel", conn)
-                st.session_state["slot_df"] = pd.read_sql_query("SELECT * FROM slot", conn)
+                
+                # Membaca tabel hari_jam / slot
+                try:
+                    st.session_state["slot_df"] = pd.read_sql_query("SELECT * FROM hari_jam", conn)
+                except Exception:
+                    st.session_state["slot_df"] = pd.read_sql_query("SELECT * FROM slot", conn)
+
                 conn.close()
                 return True
             except Exception:
@@ -42,22 +48,27 @@ def load_data_from_files():
     try:
         st.session_state["guru_df"] = pd.read_csv("data/guru.csv")
         st.session_state["rombel_df"] = pd.read_csv("data/rombel.csv")
-        
-        # Coba mengajar.csv atau guru_mengajar.csv
-        if os.path.exists("data/mengajar.csv"):
-            st.session_state["mengajar_df"] = pd.read_csv("data/mengajar.csv")
-        elif os.path.exists("data/guru_mengajar.csv"):
-            st.session_state["mengajar_df"] = pd.read_csv("data/guru_mengajar.csv")
-
         st.session_state["mapel_df"] = pd.read_csv("data/mapel.csv")
-        st.session_state["slot_df"] = pd.read_csv("data/slot.csv")
+        
+        # Coba guru_mengajar.csv atau mengajar.csv
+        if os.path.exists("data/guru_mengajar.csv"):
+            st.session_state["mengajar_df"] = pd.read_csv("data/guru_mengajar.csv")
+        elif os.path.exists("data/mengajar.csv"):
+            st.session_state["mengajar_df"] = pd.read_csv("data/mengajar.csv")
+
+        # Coba hari_jam.csv atau slot.csv
+        if os.path.exists("data/hari_jam.csv"):
+            st.session_state["slot_df"] = pd.read_csv("data/hari_jam.csv")
+        elif os.path.exists("data/slot.csv"):
+            st.session_state["slot_df"] = pd.read_csv("data/slot.csv")
+
         return True
     except Exception:
         pass
     return False
 
 def is_data_ready():
-    """Memeriksa apakah semua data master di session state sudah terisi"""
+    """Memeriksa apakah seluruh data master di session state sudah terisi"""
     return all(st.session_state.get(k) is not None and not st.session_state.get(k).empty for k in REQUIRED_KEYS)
 
 # Auto Load Data jika belum siap di memori
@@ -127,7 +138,7 @@ if is_data_ready():
                 else:
                     st.info("Laporan detail guru belum tersedia untuk hasil jadwal ini.")
         else:
-            st.error("❌ Solver tidak dapat menemukan kombinasi jadwal yang cocok. Silakan naikkan batas Timeout atau periksa kembali kecukupan slot waktu vs total JP mengajar.")
+            st.error("❌ Solver tidak dapat menemukan kombinasi jadwal yang cocok. Silakan naikkan batas Timeout atau periksa ketersediaan jam/slot mengajar.")
 
 else:
     st.warning("⚠️ Data Master belum lengkap di memori. Unggah file Excel master di bawah ini:")
@@ -138,7 +149,7 @@ else:
             excel = pd.ExcelFile(uploaded_file)
             sheet_names = excel.sheet_names
 
-            # Helper function untuk mencari nama sheet secara fleksibel
+            # Helper function untuk pencarian sheet yang fleksibel
             def read_sheet_flexibly(target_names):
                 for sheet in sheet_names:
                     norm_sheet = sheet.lower().replace("_", "").replace(" ", "")
@@ -148,23 +159,22 @@ else:
                             return pd.read_excel(excel, sheet)
                 return None
 
-            # Pembacaan fleksibel untuk setiap sheet
+            # Pembacaan spesifik berdasarkan nama sheet di Excel Anda
             st.session_state["guru_df"] = read_sheet_flexibly(["Guru"])
             st.session_state["rombel_df"] = read_sheet_flexibly(["Rombel", "Kelas"])
-            
-            # Toleran terhadap nama sheet: Mengajar, Guru_Mengajar, Guru Mengajar, dll.
-            st.session_state["mengajar_df"] = read_sheet_flexibly(["Mengajar", "Guru_Mengajar", "GuruMengajar"])
-            
             st.session_state["mapel_df"] = read_sheet_flexibly(["Mapel", "Mata_Pelajaran"])
-            st.session_state["slot_df"] = read_sheet_flexibly(["Slot", "Slot_Waktu", "Jadwal"])
+            
+            # Pemetaaan eksplisit ke sheet Guru_Mengajar dan Hari_Jam
+            st.session_state["mengajar_df"] = read_sheet_flexibly(["Guru_Mengajar", "Mengajar", "GuruMengajar"])
+            st.session_state["slot_df"] = read_sheet_flexibly(["Hari_Jam", "HariJam", "Slot", "Slot_Waktu"])
 
-            # Cek sheet yang belum ditemukan
-            missing_keys = [k for k in REQUIRED_KEYS if st.session_state[k] is None]
+            # Verifikasi jika ada sheet yang belum terbaca
+            missing_keys = [k for k in REQUIRED_KEYS if st.session_state[k] is None or st.session_state[k].empty]
             
             if missing_keys:
-                st.error(f"❌ Kunci data berikut belum ditemukan di Excel: {missing_keys}. Pastikan sheet memuat data Guru, Rombel, Mengajar/Guru_Mengajar, Mapel, dan Slot.")
+                st.error("❌ Ada sheet yang belum terbaca. Pastikan file Excel memuat sheet berikut: **Guru**, **Rombel**, **Mapel**, **Guru_Mengajar**, dan **Hari_Jam**.")
             else:
-                st.success("✅ File Excel berhasil diunggah dan seluruh sheet terbaca dengan sempurna!")
+                st.success("✅ File Excel berhasil diunggah! Seluruh sheet (Guru, Rombel, Mapel, Guru_Mengajar, Hari_Jam) terbaca sempurna.")
                 st.rerun()
 
         except Exception as e:
