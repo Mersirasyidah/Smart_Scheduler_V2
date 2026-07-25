@@ -6,7 +6,7 @@ class SchedulerSolver:
         self.kbm_slots = db_data['kbm_slots']
         self.constraints = ScheduleConstraints(db_data['guru'], db_data['slot'])
         
-        self.days = self.kbm_slots['Hari'].unique()
+        self.days = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat']
         self.slots_by_day = {}
         for day in self.days:
             self.slots_by_day[day] = self.kbm_slots[self.kbm_slots['Hari'] == day]['Jam'].tolist()
@@ -16,6 +16,15 @@ class SchedulerSolver:
         unassigned = []
 
         records = self.guru_mengajar.to_dict(orient='records')
+
+        # Prioritaskan pengalokasian: PJOK dulu, lalu blok jam terbesar (3 JP, 2 JP)
+        def priority_key(item):
+            mapel = str(item['Mapel']).lower()
+            is_pjok = 'jasmani' in mapel or 'olahraga' in mapel or 'pjok' in mapel
+            jp = item.get('JP', 0)
+            return (0 if is_pjok else 1, -jp)
+
+        records.sort(key=priority_key)
 
         for item in records:
             guru_id = item['ID Guru']
@@ -30,14 +39,17 @@ class SchedulerSolver:
                 for day in self.days:
                     if not self.constraints.is_teacher_available(guru_id, day):
                         continue
-                    
-                    # Cek aturan batas JP harian
-                    if self.constraints.is_daily_limit_exceeded(schedule_board, day, guru_id, kelas, mapel, block_size):
-                        continue
                         
-                    available_jams = self.slots_by_day[day]
+                    available_jams = self.slots_by_day.get(day, [])
                     for jam in available_jams:
+                        # Cek apakah cukup jam berturut-turut
                         if all((jam + offset) in available_jams for offset in range(block_size)):
+                            
+                            # Cek Aturan PJOK
+                            if not self.constraints.is_pjok_valid(mapel, kelas, day, jam):
+                                continue
+
+                            # Cek Bentrok Slot
                             if self.constraints.is_slot_free(schedule_board, day, jam, block_size, guru_id, kelas):
                                 for offset in range(block_size):
                                     slot_key = (day, jam + offset)
