@@ -61,6 +61,7 @@ def clean_first_name(nama_full):
 def parse_slot_list(val):
     if pd.isna(val):
         return []
+    # Mendukung format pemisah koma seperti "2,1" atau "2, 1"
     return [int(x.strip()) for x in str(val).split(',') if str(x).strip().isdigit()]
 
 def get_mapel_info(mapel_raw):
@@ -69,7 +70,9 @@ def get_mapel_info(mapel_raw):
     singkatan = MAPEL_SHORT.get(m_str, None)
     
     if not kode:
-        if 'inggris' in m_str:
+        if 'pancasila' in m_str or 'pp' in m_str or 'pkn' in m_str:
+            kode, singkatan = 'M05', 'PP'
+        elif 'inggris' in m_str:
             kode, singkatan = 'M10', 'BIG'
         elif 'matematika' in m_str:
             kode, singkatan = 'M07', 'MTK'
@@ -80,7 +83,7 @@ def get_mapel_info(mapel_raw):
             singkatan = str(mapel_raw).strip()[:4].upper()
             
     if not singkatan:
-        singkatan = 'BIG' if kode == 'M10' else str(mapel_raw).strip()[:4].upper()
+        singkatan = str(mapel_raw).strip()[:4].upper()
         
     return kode, singkatan
 
@@ -133,10 +136,7 @@ def generate_schedule(excel_source):
     gm_df['Slot_List'] = gm_df[slot_col].apply(parse_slot_list)
     records = gm_df.to_dict(orient='records')
 
-    # Urutan Prioritas Pemplotan:
-    # 1. PJOK (Terutama Kelas 9)
-    # 2. Matematika & IPA (Terutama Kelas 9 agar bisa mengambil Jam 1-2 sebelum PJOK)
-    # 3. Durasi JP terbesar
+    # Prioritas Pemplotan
     def get_priority(item):
         mapel = str(item['Mapel']).lower()
         kelas = str(item['Kelas'])
@@ -156,7 +156,7 @@ def generate_schedule(excel_source):
     records.sort(key=get_priority)
 
     schedule_board = {}
-    pjok_day_kelas9 = {} # Mencatat hari PJOK untuk masing-masing kelas 9
+    pjok_day_kelas9 = {}
     unassigned = []
 
     for item in records:
@@ -173,89 +173,95 @@ def generate_schedule(excel_source):
 
         for block_size in slot_blocks:
             placed = False
-            for day in days:
+            
+            # Kita lakukan 2 pass:
+            # Pass 1: Mencoba menempatkan dengan aturan ketat (Aturan Khusus Kelas 9 & MGMP)
+            # Pass 2: Jika gagal, rilekskan aturan khusus kelas 9 agar slot tetap terisi (Fallback)
+            for mode in ['strict', 'fallback']:
                 if placed:
                     break
 
-                # 1. ATURAN PISAH HARI (Max 1 blok per mapel/kelas per hari)
-                existing_jp_in_day = 0
-                for (h, _), entries in schedule_board.items():
-                    if h == day:
-                        for e in entries:
-                            if e['kelas'] == kelas and str(e['mapel']).strip().lower() == str(mapel).strip().lower():
-                                existing_jp_in_day += 1
+                for day in days:
+                    if placed:
+                        break
 
-                if existing_jp_in_day > 0:
-                    continue
+                    # 1. ATURAN PISAH HARI
+                    existing_jp_in_day = 0
+                    for (h, _), entries in schedule_board.items():
+                        if h == day:
+                            for e in entries:
+                                if e['kelas'] == kelas and str(e['mapel']).strip().lower() == str(mapel).strip().lower():
+                                    existing_jp_in_day += 1
 
-                # 2. ATURAN MGMP & STATUS GURU
-                mgmp_day = str(mgmp_days.get(guru_id, '')).strip().lower()
-                status = str(guru_status.get(guru_id, '')).strip().upper()
-                is_mgmp_day = (mgmp_day == day.lower())
-
-                if is_mgmp_day and status == 'GTT':
-                    continue
-
-                available_jams = slots_by_day.get(day, [])
-                
-                for jam in available_jams:
-                    if is_mgmp_day and status != 'GTT':
-                        if (jam + block_size - 1) > 3:
-                            continue
-
-                    if not all((jam + offset) in available_jams for offset in range(block_size)):
+                    if existing_jp_in_day > 0:
                         continue
 
-                    # 3. ATURAN KHUSUS KELAS 9: PJOK JAM 3-5
-                    if is_kelas_9 and is_pjok:
-                        if jam != 3 or block_size != 3:
+                    # 2. ATURAN MGMP & STATUS GURU
+                    mgmp_day = str(mgmp_days.get(guru_id, '')).strip().lower()
+                    status = str(guru_status.get(guru_id, '')).strip().upper()
+                    is_mgmp_day = (mgmp_day == day.lower())
+
+                    if is_mgmp_day and status == 'GTT':
+                        continue
+
+                    available_jams = slots_by_day.get(day, [])
+                    
+                    for jam in available_jams:
+                        if is_mgmp_day and status != 'GTT':
+                            if (jam + block_size - 1) > 3:
+                                continue
+
+                        if not all((jam + offset) in available_jams for offset in range(block_size)):
                             continue
 
-                    # 4. ATURAN KHUSUS KELAS 9: MTK / IPA DITEMPATKAN DI JAM 1-2 DI HARI PJOK
-                    if is_kelas_9 and is_mtk_ipa and block_size == 2:
-                        target_pjok_day = pjok_day_kelas9.get(kelas)
-                        if target_pjok_day and day == target_pjok_day:
-                            if jam != 1:
-                                continue
+                        # Mode Strict: Terapkan aturan khusus kelas 9
+                        if mode == 'strict':
+                            if is_kelas_9 and is_pjok:
+                                if jam != 3 or block_size != 3:
+                                    continue
 
-                    # 5. ATURAN PJOK KELAS 7 & 8 (Pagi Hari)
-                    if is_pjok and not is_kelas_9:
-                        tingkat = str(kelas)[0] if str(kelas)[0].isdigit() else ''
-                        if tingkat in ['7', '8']:
-                            valid_jam = (jam == 2) if day == 'Senin' else (jam == 1)
-                            if not valid_jam:
-                                continue
+                            if is_kelas_9 and is_mtk_ipa and block_size == 2:
+                                target_pjok_day = pjok_day_kelas9.get(kelas)
+                                if target_pjok_day and day == target_pjok_day:
+                                    if jam != 1:
+                                        continue
 
-                    # 6. CEK BENTROK GURU & KELAS
-                    bentrok = False
-                    for offset in range(block_size):
-                        slot_key = (day, jam + offset)
-                        if slot_key in schedule_board:
-                            for e in schedule_board[slot_key]:
-                                if e['guru_id'] == guru_id or e['kelas'] == kelas:
-                                    bentrok = True
-                                    break
-                        if bentrok:
-                            break
+                            if is_pjok and not is_kelas_9:
+                                tingkat = str(kelas)[0] if str(kelas)[0].isdigit() else ''
+                                if tingkat in ['7', '8']:
+                                    valid_jam = (jam == 2) if day == 'Senin' else (jam == 1)
+                                    if not valid_jam:
+                                        continue
 
-                    if not bentrok:
+                        # 3. CEK BENTROK GURU & KELAS
+                        bentrok = False
                         for offset in range(block_size):
                             slot_key = (day, jam + offset)
-                            if slot_key not in schedule_board:
-                                schedule_board[slot_key] = []
-                            schedule_board[slot_key].append({
-                                'guru_id': guru_id,
-                                'nama_guru': guru_nama,
-                                'mapel': mapel,
-                                'kelas': kelas
-                            })
-                        
-                        # Catat Hari PJOK Kelas 9 untuk acuan Matematika/IPA
-                        if is_kelas_9 and is_pjok:
-                            pjok_day_kelas9[kelas] = day
+                            if slot_key in schedule_board:
+                                for e in schedule_board[slot_key]:
+                                    if e['guru_id'] == guru_id or e['kelas'] == kelas:
+                                        bentrok = True
+                                        break
+                            if bentrok:
+                                break
 
-                        placed = True
-                        break
+                        if not bentrok:
+                            for offset in range(block_size):
+                                slot_key = (day, jam + offset)
+                                if slot_key not in schedule_board:
+                                    schedule_board[slot_key] = []
+                                schedule_board[slot_key].append({
+                                    'guru_id': guru_id,
+                                    'nama_guru': guru_nama,
+                                    'mapel': mapel,
+                                    'kelas': kelas
+                                })
+                            
+                            if is_kelas_9 and is_pjok:
+                                pjok_day_kelas9[kelas] = day
+
+                            placed = True
+                            break
 
             if not placed:
                 unassigned.append({
@@ -335,12 +341,12 @@ tab_nama, tab_kode, tab_detail, tab_unassigned = st.tabs([
 
 with tab_nama:
     st.subheader("1. Tampilan Matriks: Singkatan Mapel & Nama Depan Guru")
-    st.caption("Contoh isi sel: PJOK (Supri)")
+    st.caption("Contoh isi sel: PP (Supri)")
     st.dataframe(matrix_nama, use_container_width=True)
 
 with tab_kode:
     st.subheader("2. Tampilan Matriks: Kode Mapel & ID Guru")
-    st.caption("Contoh isi sel: M11 (G14)")
+    st.caption("Contoh isi sel: M05 (G14)")
     st.dataframe(matrix_kode, use_container_width=True)
 
 with tab_detail:
