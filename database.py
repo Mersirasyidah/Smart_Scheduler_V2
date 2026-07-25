@@ -1,28 +1,39 @@
 import pandas as pd
-import os
 
-EXCEL_PATH = os.path.join("data", "database_scheduler.xlsx")
+class DatabaseLoader:
+    def __init__(self, excel_path="database_scheduler.xlsx"):
+        self.excel_path = excel_path
+        self.guru_df = None
+        self.mapel_df = None
+        self.rombel_df = None
+        self.guru_mengajar_df = None
+        self.slot_df = None
 
-class DatabaseManager:
-    def __init__(self, file_path=EXCEL_PATH):
-        self.file_path = file_path
+    def load_data(self):
+        xls = pd.ExcelFile(self.excel_path)
+        
+        self.guru_df = pd.read_excel(xls, 'Guru')
+        self.mapel_df = pd.read_excel(xls, 'Mapel')
+        self.rombel_df = pd.read_excel(xls, 'Rombel')
+        self.guru_mengajar_df = pd.read_excel(xls, 'Guru_Mengajar')
+        self.slot_df = pd.read_excel(xls, 'Slot')
 
-    def load_all_data(self):
-        """Membaca seluruh sheet dari database Excel."""
-        xls = pd.ExcelFile(self.file_path)
-        data = {
-            "guru": pd.read_excel(xls, "Guru"),
-            "mapel": pd.read_excel(xls, "Mapel"),
-            "rombel": pd.read_excel(xls, "Rombel"),
-            "guru_mengajar": pd.read_excel(xls, "Guru_Mengajar"),
-            "hari_jam": pd.read_excel(xls, "Hari_Jam")
+        # Preprocessing kolom Slot ("2,2,1" -> [2, 2, 1])
+        if 'Slot' in self.guru_mengajar_df.columns:
+            self.guru_mengajar_df['Slot_List'] = self.guru_mengajar_df['Slot'].apply(
+                lambda x: [int(i.strip()) for i in str(x).split(',')] if pd.notna(x) else []
+            )
+
+        print(" Data Excel Berhasil Dimuat!")
+        return {
+            'guru': self.guru_df,
+            'mapel': self.mapel_df,
+            'rombel': self.rombel_df,
+            'guru_mengajar': self.guru_mengajar_df,
+            'slot': self.slot_df
         }
-        return data
 
-    def get_time_slots(self):
-        """Mengambil slot jam pelajaran efektif (bukan upacara/istirahat)."""
-        df_jam = pd.read_excel(self.file_path, sheet_name="Hari_Jam")
-        # Filter hanya slot jam pembelajaran (Jam != NaN)
-        df_pembelajaran = df_jam[df_jam['Jam'].notna()].copy()
-        df_pembelajaran['Jam'] = df_pembelajaran['Jam'].astype(int)
-        return df_pembelajaran
+if __name__ == "__main__":
+    db = DatabaseLoader()
+    data = db.load_data()
+    print(f"Total Alokasi Mengajar: {len(data['guru_mengajar'])} data")
