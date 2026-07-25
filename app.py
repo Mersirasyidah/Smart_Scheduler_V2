@@ -15,10 +15,41 @@ target_file_path = st.sidebar.text_input("Atau ketik jalur file lokal:", value="
 
 input_data = uploaded_file if uploaded_file is not None else target_file_path
 
-def normalize_text(text):
-    if pd.isna(text):
-        return ""
-    return re.sub(r'[^a-z0-9]', '', str(text).lower())
+# --- MAPPING KODE & SINGKATAN MAPEL ---
+MAPEL_TO_KODE = {
+    'pendidikan agama islam': 'M01', 'pai': 'M01',
+    'pendidikan agama hindu': 'M02',
+    'pendidikan agama katholik': 'M03',
+    'pendidikan agama kristen': 'M04',
+    'pendidikan pancasila': 'M05', 'pp': 'M05', 'pkn': 'M05',
+    'bahasa indonesia': 'M06', 'b. indonesia': 'M06', 'bin': 'M06',
+    'matematika': 'M07', 'mtk': 'M07',
+    'ilmu pengetahuan alam': 'M08', 'ipa': 'M08',
+    'ilmu pengetahuan sosial': 'M09', 'ips': 'M09',
+    'bahasa inggris': 'M10', 'b. inggris': 'M10', 'b.inggris': 'M10', 'big': 'M10',
+    'pendidikan jasmani olahraga dan kesehatan': 'M11', 'pjok': 'M11',
+    'informatika': 'M12', 'inf': 'M12',
+    'seni budaya': 'M13', 'snb': 'M13',
+    'prakarya': 'M14', 'prk': 'M14',
+    'bahasa jawa': 'M15', 'b. jawa': 'M15', 'bjw': 'M15',
+    'bimbingan konseling': 'M16', 'bk': 'M16'
+}
+
+MAPEL_SHORT = {
+    'pendidikan agama islam': 'PAI', 'pai': 'PAI',
+    'pendidikan pancasila': 'PP', 'pp': 'PP',
+    'bahasa indonesia': 'BIN', 'bin': 'BIN',
+    'matematika': 'MTK', 'mtk': 'MTK',
+    'ilmu pengetahuan alam': 'IPA', 'ipa': 'IPA',
+    'ilmu pengetahuan sosial': 'IPS', 'ips': 'IPS',
+    'bahasa inggris': 'BIG', 'b. inggris': 'BIG', 'b.inggris': 'BIG', 'big': 'BIG',
+    'pendidikan jasmani olahraga dan kesehatan': 'PJOK', 'pjok': 'PJOK',
+    'informatika': 'INF', 'inf': 'INF',
+    'seni budaya': 'SNB', 'snb': 'SNB',
+    'prakarya': 'PRK', 'prk': 'PRK',
+    'bahasa jawa': 'BJW', 'bjw': 'BJW',
+    'bimbingan konseling': 'BK', 'bk': 'BK'
+}
 
 def clean_first_name(nama_full):
     if pd.isna(nama_full):
@@ -27,69 +58,45 @@ def clean_first_name(nama_full):
     words = clean_str.split()
     return words[0] if words else ""
 
-def get_slot_structure_by_mapel(mapel_raw, val_raw):
-    norm = normalize_text(mapel_raw)
-    
-    if any(k in norm for k in ['matematika', 'mtk', 'm07', 'ipa', 'm08']):
-        return [2, 2, 1]
-    elif any(k in norm for k in ['indonesia', 'bin', 'm06']):
-        return [2, 2, 2]
-    elif any(k in norm for k in ['ips', 'm09', 'inggris', 'ing', 'big', 'm10']):
-        return [2, 2]
-    elif any(k in norm for k in ['pancasila', 'pp', 'pkn', 'm05']):
-        return [2, 1]
-    else:
-        if not pd.isna(val_raw):
-            val_str = str(val_raw).strip()
-            if ',' in val_str or ';' in val_str:
-                res = [int(x.strip()) for x in val_str.replace(';', ',').split(',') if x.strip().isdigit()]
-                if res:
-                    return res
-            elif val_str.isdigit():
-                return [int(val_str)]
-        return [3]
+def parse_slot_list(val):
+    if pd.isna(val):
+        return []
+    return [int(x.strip()) for x in str(val).split(',') if str(x).strip().isdigit()]
 
 def get_mapel_info(mapel_raw):
-    norm = normalize_text(mapel_raw)
-    if any(k in norm for k in ['inggris', 'ing', 'big', 'm10']):
-        return 'M10', 'BIG'
-    elif any(k in norm for k in ['pancasila', 'pp', 'pkn', 'm05']):
-        return 'M05', 'PP'
-    elif any(k in norm for k in ['agama', 'islam', 'pai', 'm01']):
-        return 'M01', 'PAI'
-    elif any(k in norm for k in ['indonesia', 'bin', 'm06']):
-        return 'M06', 'BIN'
-    elif any(k in norm for k in ['matematika', 'mtk', 'm07']):
-        return 'M07', 'MTK'
-    elif any(k in norm for k in ['ipa', 'm08']):
-        return 'M08', 'IPA'
-    elif any(k in norm for k in ['ips', 'm09']):
-        return 'M09', 'IPS'
-    elif any(k in norm for k in ['jasmani', 'pjok', 'm11']):
-        return 'M11', 'PJOK'
-    elif any(k in norm for k in ['informatika', 'inf', 'm12']):
-        return 'M12', 'INF'
-    elif any(k in norm for k in ['seni', 'snb', 'm13']):
-        return 'M13', 'SNB'
-    elif any(k in norm for k in ['prakarya', 'prk', 'm14']):
-        return 'M14', 'PRK'
-    elif any(k in norm for k in ['jawa', 'bjw', 'm15']):
-        return 'M15', 'BJW'
-    elif any(k in norm for k in ['konseling', 'bk', 'm16']):
-        return 'M16', 'BK'
-    else:
-        return 'MXX', str(mapel_raw).strip()[:4].upper()
+    m_str = str(mapel_raw).strip().lower()
+    kode = MAPEL_TO_KODE.get(m_str, None)
+    singkatan = MAPEL_SHORT.get(m_str, None)
+    
+    if not kode:
+        if 'pancasila' in m_str or 'pp' in m_str or 'pkn' in m_str:
+            kode, singkatan = 'M05', 'PP'
+        elif 'inggris' in m_str or 'big' in m_str:
+            kode, singkatan = 'M10', 'BIG'
+        elif 'matematika' in m_str or 'mtk' in m_str:
+            kode, singkatan = 'M07', 'MTK'
+        elif 'jasmani' in m_str or 'pjok' in m_str:
+            kode, singkatan = 'M11', 'PJOK'
+        else:
+            kode = 'MXX'
+            singkatan = str(mapel_raw).strip()[:4].upper()
+            
+    if not singkatan:
+        singkatan = 'BIG' if kode == 'M10' else str(mapel_raw).strip()[:4].upper()
+        
+    return kode, singkatan
 
 def get_sheet_df(xls, target_name):
-    target_clean = normalize_text(target_name)
+    target_clean = re.sub(r'[^a-zA-Z0-9]', '', str(target_name)).lower()
     for sheet in xls.sheet_names:
-        if target_clean in normalize_text(sheet):
+        sheet_clean = re.sub(r'[^a-zA-Z0-9]', '', str(sheet)).lower()
+        if target_clean == sheet_clean or target_clean in sheet_clean:
             df = pd.read_excel(xls, sheet)
             df.columns = [str(c).strip() for c in df.columns]
             return df
-    raise ValueError(f"Sheet '{target_name}' tidak ditemukan!")
+    raise ValueError(f"Sheet '{target_name}' tidak ditemukan! Sheet yang ada: {xls.sheet_names}.")
 
-# --- ENGINE ALGORITMA SCHEDULE ---
+# --- ENGINE ALGORITMA PENYUSUNAN JADWAL ---
 def generate_schedule(excel_source):
     xls = pd.ExcelFile(excel_source)
     guru_df = get_sheet_df(xls, 'Guru')
@@ -102,24 +109,23 @@ def generate_schedule(excel_source):
         if 'Hari MGMP' in guru_df.columns:
             mgmp_days = dict(zip(guru_df['ID Guru'].astype(str).str.strip(), guru_df['Hari MGMP'].fillna('')))
         if 'Status' in guru_df.columns:
-            guru_status = dict(zip(guru_df['ID Guru'].astype(str).str.strip(), guru_status.get('Status', guru_df['Status'].fillna(''))))
+            guru_status = dict(zip(guru_df['ID Guru'].astype(str).str.strip(), guru_df['Status'].fillna('')))
 
-    slot_col = None
+    slot_col = 'Slot'
     for c in gm_df.columns:
         if any(kw in c.lower() for kw in ['slot', 'alokasi', 'jp', 'jam']):
             slot_col = c
             break
-    if not slot_col:
-        slot_col = gm_df.columns[-1]
 
+    # PERBAIKAN FILTER SLOT: Hanya membuang Non-KBM (Upacara/Istirahat/Sholat/Pembiasaan)
     slot_df['Jam'] = pd.to_numeric(slot_df['Jam'], errors='coerce')
     slot_df = slot_df.dropna(subset=['Jam'])
     slot_df['Jam'] = slot_df['Jam'].astype(int)
 
-    jenis_col = [c for c in slot_df.columns if 'jenis' in c.lower() or 'keterangan' in c.lower()]
-    if jenis_col:
-        j_name = jenis_col[0]
-        kbm_slots = slot_df[~slot_df[j_name].astype(str).str.upper().str.contains('ISTIRAHAT|UPACARA|PEMBIASAAN|SHOLAT')].copy()
+    jenis_cols = [c for c in slot_df.columns if any(k in c.lower() for k in ['jenis', 'keterangan', 'kegiatan'])]
+    if jenis_cols:
+        j_col = jenis_cols[0]
+        kbm_slots = slot_df[~slot_df[j_col].astype(str).str.upper().str.contains('ISTIRAHAT|UPACARA|PEMBIASAAN|SHOLAT')].copy()
     else:
         kbm_slots = slot_df.copy()
 
@@ -129,23 +135,34 @@ def generate_schedule(excel_source):
         jams = kbm_slots[kbm_slots['Hari'].astype(str).str.strip().str.capitalize() == d]['Jam'].tolist()
         slots_by_day[d] = sorted(list(set(jams)))
 
-    gm_df['Slot_List'] = gm_df.apply(lambda row: get_slot_structure_by_mapel(row['Mapel'], row[slot_col]), axis=1)
+    gm_df['Slot_List'] = gm_df[slot_col].apply(parse_slot_list)
     gm_df['ID Guru'] = gm_df['ID Guru'].astype(str).str.strip()
     records = gm_df.to_dict(orient='records')
 
+    # Urutan Prioritas Plotting
     def get_priority(item):
-        norm = normalize_text(item['Mapel'])
-        if any(k in norm for k in ['inggris', 'ing', 'big', 'm10']):
-            return 0
-        elif any(k in norm for k in ['pjok', 'jasmani', 'm11']):
-            return 1
-        elif any(k in norm for k in ['matematika', 'mtk', 'm07']):
-            return 2
-        return 3
+        mapel = str(item['Mapel']).lower()
+        kelas = str(item['Kelas'])
+        is_pjok = 'jasmani' in mapel or 'pjok' in mapel or 'm11' in mapel
+        is_mtk_ipa = 'matematika' in mapel or 'mtk' in mapel or 'ipa' in mapel
+        is_inggris = 'inggris' in mapel or 'big' in mapel or 'm10' in mapel
+        is_kelas_9 = kelas.startswith('9')
+
+        if is_inggris:
+            return (0, -item.get('JP', 0))
+        elif is_pjok and is_kelas_9:
+            return (1, -item.get('JP', 0))
+        elif is_mtk_ipa and is_kelas_9:
+            return (2, -item.get('JP', 0))
+        elif is_pjok:
+            return (3, -item.get('JP', 0))
+        else:
+            return (4, -item.get('JP', 0))
 
     records.sort(key=get_priority)
 
     schedule_board = {}
+    pjok_day_kelas9 = {}
     unassigned = []
 
     for item in records:
@@ -154,11 +171,12 @@ def generate_schedule(excel_source):
         mapel = item['Mapel']
         kelas = item['Kelas']
         slot_blocks = item.get('Slot_List', [])
-        norm_mapel = normalize_text(mapel)
 
-        is_inggris = any(k in norm_mapel for k in ['inggris', 'ing', 'big', 'm10'])
-        is_pjok = any(k in norm_mapel for k in ['pjok', 'jasmani', 'm11'])
-        is_mtk = any(k in norm_mapel for k in ['matematika', 'mtk', 'm07'])
+        mapel_lower = str(mapel).lower().strip()
+        is_pjok = 'jasmani' in mapel_lower or 'pjok' in mapel_lower
+        is_mtk_ipa = 'matematika' in mapel_lower or 'mtk' in mapel_lower or 'ipa' in mapel_lower
+        is_kelas_9 = str(kelas).startswith('9')
+        is_inggris = 'inggris' in mapel_lower or 'big' in mapel_lower
 
         status_g = str(guru_status.get(guru_id, '')).strip().upper()
         is_gtt = 'GTT' in status_g
@@ -168,9 +186,9 @@ def generate_schedule(excel_source):
 
         for block_size in slot_blocks:
             placed = False
-
-            # Tambahkan mode 'last_resort' untuk memaksa penempatan jika slot biasa penuh
-            modes = ['strict', 'moderate', 'flexible', 'emergency', 'last_resort']
+            
+            # TAHAPAN RELAKSASI MULTI-MODE
+            modes = ['strict', 'moderate', 'flexible', 'emergency']
             search_days = ['Jumat', 'Senin', 'Rabu', 'Kamis', 'Selasa'] if is_inggris else days
 
             for mode in modes:
@@ -181,36 +199,47 @@ def generate_schedule(excel_source):
                     if placed:
                         break
 
-                    # Abaikan batasan hari yang sama jika sudah di mode darurat
-                    if day in days_assigned and mode not in ['flexible', 'emergency', 'last_resort']:
-                        continue
+                    # Cegah pemetaan mapel sama di hari yang sama kecuali di mode flexible/emergency
+                    if mode not in ['flexible', 'emergency']:
+                        already_placed_same_day = False
+                        for (h, _), entries in schedule_board.items():
+                            if h == day:
+                                for e in entries:
+                                    if e['kelas'] == kelas and str(e['mapel']).strip().lower() == mapel_lower:
+                                        already_placed_same_day = True
+                                        break
+                                if already_placed_same_day:
+                                    break
+                        if already_placed_same_day:
+                            continue
 
+                    # Penanganan MGMP
                     is_mgmp_today = (mgmp_day.lower() == day.lower()) or (is_inggris and day.lower() == 'selasa')
-
-                    if is_mgmp_today and mode not in ['flexible', 'emergency', 'last_resort']:
+                    if is_mgmp_today and mode not in ['flexible', 'emergency']:
                         if is_gtt or is_inggris:
                             continue
 
                     available_jams = slots_by_day.get(day, [])
 
                     for jam in available_jams:
-                        # Relaksasi aturan posisi jam untuk PJOK dan MTK jika di mode darurat
-                        if is_pjok and mode in ['strict', 'moderate'] and jam != 1:
-                            continue
-                        if is_mtk and block_size == 2 and mode in ['strict', 'moderate'] and jam > 2:
-                            continue
-
-                        if is_mgmp_today and not is_gtt and mode not in ['flexible', 'emergency', 'last_resort']:
+                        if is_mgmp_today and not is_gtt and mode not in ['flexible', 'emergency']:
                             if (jam + block_size - 1) > 3:
                                 continue
 
-                        # Cek kontinuitas slot
                         if not all((jam + offset) in available_jams for offset in range(block_size)):
-                            # Jika di mode last_resort, pecah blok jika slot tidak berurutan
-                            if mode != 'last_resort':
-                                continue
+                            continue
 
-                        # Cek Bentrok Guru atau Kelas
+                        # Aturan Khusus Kelas 9 (Hanya aktif di mode strict & moderate)
+                        if mode in ['strict', 'moderate']:
+                            if is_kelas_9 and is_pjok:
+                                if jam != 3 or block_size != 3:
+                                    continue
+                            if is_kelas_9 and is_mtk_ipa and block_size == 2:
+                                target_pjok_day = pjok_day_kelas9.get(kelas)
+                                if target_pjok_day and day == target_pjok_day and jam != 1:
+                                    continue
+
+                        # Cek Bentrok Guru & Kelas
                         bentrok = False
                         for offset in range(block_size):
                             slot_key = (day, jam + offset)
@@ -233,6 +262,10 @@ def generate_schedule(excel_source):
                                     'mapel': mapel,
                                     'kelas': kelas
                                 })
+
+                            if is_kelas_9 and is_pjok:
+                                pjok_day_kelas9[kelas] = day
+
                             placed = True
                             days_assigned.add(day)
                             break
@@ -266,22 +299,23 @@ def generate_schedule(excel_source):
 
     return pd.DataFrame(rows), unassigned
 
-# --- UI STREAMLIT ---
-btn_generate = st.button("🚀 Generate Jadwal Sekarang", type="primary")
+# --- TOMBOL RUN JADWAL & PROSES ---
+btn_generate = st.button("🚀 Generate Jadwal Sekarang", type="primary", use_container_width=False)
 
 if btn_generate or 'df_schedule' not in st.session_state:
-    with st.spinner("Mengolah jadwal..."):
+    with st.spinner("Sedang memproses dan mengoptimalkan jadwal..."):
         try:
             df_sched, unassigned_list = generate_schedule(input_data)
             st.session_state['df_schedule'] = df_sched
             st.session_state['unassigned'] = unassigned_list
         except Exception as e:
-            st.error(f"Error: {e}")
+            st.error(f"Gagal membaca/memproses file Excel: {e}")
             st.stop()
 
 df_schedule = st.session_state['df_schedule']
 unassigned = st.session_state['unassigned']
 
+# --- MEMBUAT TABEL MATRIKS ---
 if not df_schedule.empty:
     df_schedule['Display_Nama'] = df_schedule['Mapel Singkat'] + "\n(" + df_schedule['Nama Guru'] + ")"
     matrix_nama = df_schedule.pivot_table(
@@ -293,43 +327,64 @@ if not df_schedule.empty:
         index=['Hari', 'Jam'], columns='Kelas', values='Display_Kode', aggfunc='first'
     ).fillna('-')
 else:
-    matrix_nama, matrix_kode = pd.DataFrame(), pd.DataFrame()
+    matrix_nama = pd.DataFrame()
+    matrix_kode = pd.DataFrame()
 
-# METRIK DASHBOARD
+# --- DISPLAY DASHBOARD ---
+st.markdown("---")
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("Total Slot Terisi", len(df_schedule))
-m2.metric("Jumlah Kelas", df_schedule['Kelas'].nunique() if not df_schedule.empty else 0)
-m3.metric("Jumlah Guru", df_schedule['ID Guru'].nunique() if not df_schedule.empty else 0)
-m4.metric("Gagal (Unassigned)", len(unassigned), delta_color="inverse")
+with m1:
+    st.metric("Total Slot Terisi", len(df_schedule))
+with m2:
+    st.metric("Jumlah Kelas", df_schedule['Kelas'].nunique() if not df_schedule.empty else 0)
+with m3:
+    st.metric("Jumlah Guru", df_schedule['ID Guru'].nunique() if not df_schedule.empty else 0)
+with m4:
+    st.metric("Gagal Dijadwalkan", len(unassigned), delta_color="inverse")
 
-# TAB DISPLAY
-t1, t2, t3, t4 = st.tabs(["👤 Matriks (Nama)", "🔢 Matriks (Kode)", "📋 Master Detail", "⚠️ Unassigned"])
+# --- TABS BROWSER HASIL ---
+tab_nama, tab_kode, tab_detail, tab_unassigned = st.tabs([
+    "👤 Matriks (Nama Guru)", 
+    "🔢 Matriks (Kode Mapel)", 
+    "📋 Master List", 
+    "⚠️ Unassigned"
+])
 
-with t1:
+with tab_nama:
+    st.subheader("1. Tampilan Matriks: Singkatan Mapel & Nama Depan Guru")
+    st.caption("Contoh isi sel: BIG (Lestari)")
     st.dataframe(matrix_nama, use_container_width=True)
-with t2:
+
+with tab_kode:
+    st.subheader("2. Tampilan Matriks: Kode Mapel & ID Guru")
+    st.caption("Contoh isi sel: M10 (G03 / G05 / G29)")
     st.dataframe(matrix_kode, use_container_width=True)
-with t3:
+
+with tab_detail:
+    st.subheader("Master List Detail Jadwal")
     st.dataframe(df_schedule, use_container_width=True)
-with t4:
+
+with tab_unassigned:
+    st.subheader("Daftar Jam Mengajar yang Gagal Dijadwalkan")
     if unassigned:
-        st.warning(f"Terdapat {len(unassigned)} alokasi jam belum mendapat slot:")
+        st.warning(f"Terdapat {len(unassigned)} alokasi jam mengajar yang tidak mendapat slot.")
         st.dataframe(pd.DataFrame(unassigned), use_container_width=True)
     else:
-        st.success("🎉 Berhasil! Seluruh alokasi jam berhasil dijadwalkan tanpa ada unassigned!")
+        st.success("🎉 Luar biasa! Semua jadwal 100% berhasil di-plot tanpa unassigned.")
 
-# DOWNLOAD EXCEL
+# --- DOWNLOAD BUTTON ---
+st.markdown("---")
 buffer = io.BytesIO()
 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-    matrix_nama.to_excel(writer, sheet_name='Matriks_Nama')
-    matrix_kode.to_excel(writer, sheet_name='Matriks_Kode')
+    matrix_nama.to_excel(writer, sheet_name='Matriks_Nama_Guru')
+    matrix_kode.to_excel(writer, sheet_name='Matriks_Kode_Mapel')
     df_schedule.to_excel(writer, sheet_name='Master_Detail', index=False)
     if unassigned:
         pd.DataFrame(unassigned).to_excel(writer, sheet_name='Unassigned', index=False)
 
 st.download_button(
-    label="📥 Download Excel Hasil Jadwal",
+    label="📥 Download Hasil Jadwal ke Excel",
     data=buffer.getvalue(),
-    file_name="Jadwal_Pelajaran_Terbaru.xlsx",
+    file_name="Hasil_Jadwal_Pelajaran.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
