@@ -13,28 +13,42 @@ st.sidebar.header("📁 Input Database")
 uploaded_file = st.sidebar.file_uploader("Upload File Database Excel", type=["xlsx", "xls"])
 target_file_path = st.sidebar.text_input("Atau ketik jalur file lokal:", value="database_scheduler.xlsx")
 
-# Prioritaskan file upload jika ada, jika tidak gunakan path lokal
 input_data = uploaded_file if uploaded_file is not None else target_file_path
 
-# --- MAPPING KODE & SINGKATAN MAPEL ---
+# --- MAPPING KODE & SINGKATAN MAPEL (DIOPERKAYA) ---
 MAPEL_TO_KODE = {
-    'Pendidikan Agama Islam': 'M01', 'Pendidikan Agama Hindu': 'M02',
-    'Pendidikan Agama Katholik': 'M03', 'Pendidikan Agama Kristen': 'M04',
-    'Pendidikan Pancasila': 'M05', 'Bahasa Indonesia': 'M06',
-    'Matematika': 'M07', 'Ilmu Pengetahuan Alam': 'M08',
-    'Ilmu Pengetahuan Sosial': 'M09', 'Bahasa Inggris': 'M10',
-    'Pendidikan Jasmani Olahraga dan Kesehatan': 'M11', 'Informatika': 'M12',
-    'Seni Budaya': 'M13', 'Prakarya': 'M14',
-    'Bahasa Jawa': 'M15', 'Bimbingan Konseling': 'M16'
+    'pendidikan agama islam': 'M01', 'pAI': 'M01',
+    'pendidikan agama hindu': 'M02',
+    'pendidikan agama katholik': 'M03',
+    'pendidikan agama kristen': 'M04',
+    'pendidikan pancasila': 'M05', 'pp': 'M05', 'pkn': 'M05',
+    'bahasa indonesia': 'M06', 'b. indonesia': 'M06', 'bin': 'M06',
+    'matematika': 'M07', 'mtk': 'M07',
+    'ilmu pengetahuan alam': 'M08', 'ipa': 'M08',
+    'ilmu pengetahuan sosial': 'M09', 'ips': 'M09',
+    'bahasa inggris': 'M10', 'b. inggris': 'M10', 'b.inggris': 'M10', 'big': 'M10', 'm07': 'M10', # M07 dialiaskan juga jika ada bentrok kode
+    'pendidikan jasmani olahraga dan kesehatan': 'M11', 'pjok': 'M11',
+    'informatika': 'M12', 'inf': 'M12',
+    'seni budaya': 'M13', 'snb': 'M13',
+    'prakarya': 'M14', 'prk': 'M14',
+    'bahasa jawa': 'M15', 'b. jawa': 'M15', 'bjw': 'M15',
+    'bimbingan konseling': 'M16', 'bk': 'M16'
 }
 
 MAPEL_SHORT = {
-    'Pendidikan Agama Islam': 'PAI', 'Pendidikan Pancasila': 'PP',
-    'Bahasa Indonesia': 'BIN', 'Matematika': 'MTK',
-    'Ilmu Pengetahuan Alam': 'IPA', 'Ilmu Pengetahuan Sosial': 'IPS',
-    'Bahasa Inggris': 'BIG', 'Pendidikan Jasmani Olahraga dan Kesehatan': 'PJOK',
-    'Informatika': 'INF', 'Seni Budaya': 'SNB',
-    'Prakarya': 'PRK', 'Bahasa Jawa': 'BJW', 'Bimbingan Konseling': 'BK'
+    'pendidikan agama islam': 'PAI', 'pai': 'PAI',
+    'pendidikan pancasila': 'PP', 'pp': 'PP',
+    'bahasa indonesia': 'BIN', 'bin': 'BIN',
+    'matematika': 'MTK', 'mtk': 'MTK',
+    'ilmu pengetahuan alam': 'IPA', 'ipa': 'IPA',
+    'ilmu pengetahuan sosial': 'IPS', 'ips': 'IPS',
+    'bahasa inggris': 'BIG', 'b. inggris': 'BIG', 'b.inggris': 'BIG', 'big': 'BIG',
+    'pendidikan jasmani olahraga dan kesehatan': 'PJOK', 'pjok': 'PJOK',
+    'informatika': 'INF', 'inf': 'INF',
+    'seni budaya': 'SNB', 'snb': 'SNB',
+    'prakarya': 'PRK', 'prk': 'PRK',
+    'bahasa jawa': 'BJW', 'bjw': 'BJW',
+    'bimbingan konseling': 'BK', 'bk': 'BK'
 }
 
 def clean_first_name(nama_full):
@@ -49,19 +63,38 @@ def parse_slot_list(val):
         return []
     return [int(x.strip()) for x in str(val).split(',') if str(x).strip().isdigit()]
 
+def get_mapel_info(mapel_raw):
+    m_str = str(mapel_raw).strip().lower()
+    
+    # Cari di dictionary
+    kode = MAPEL_TO_KODE.get(m_str, None)
+    singkatan = MAPEL_SHORT.get(m_str, None)
+    
+    # Fallback jika tidak terdaftar
+    if not kode:
+        if 'inggris' in m_str:
+            kode, singkatan = 'M10', 'BIG'
+        elif 'matematika' in m_str:
+            kode, singkatan = 'M07', 'MTK'
+        else:
+            kode = 'MXX'
+            singkatan = str(mapel_raw).strip()[:4].upper()
+            
+    if not singkatan:
+        singkatan = 'BIG' if kode == 'M10' else str(mapel_raw).strip()[:4].upper()
+        
+    return kode, singkatan
+
 # --- FUNGSI AMAN MEMBACA SHEET EXCEL ---
 def get_sheet_df(xls, target_name):
     target_clean = re.sub(r'[^a-zA-Z0-9]', '', str(target_name)).lower()
-    
-    # 1. Prioritaskan pencocokan eksak (Exact match)
     for sheet in xls.sheet_names:
         sheet_clean = re.sub(r'[^a-zA-Z0-9]', '', str(sheet)).lower()
         if target_clean == sheet_clean:
             df = pd.read_excel(xls, sheet)
-            df.columns = [str(c).strip() for c in df.columns] # Clean column headers
+            df.columns = [str(c).strip() for c in df.columns]
             return df
 
-    # 2. Match parsial jika eksak tidak ada
     for sheet in xls.sheet_names:
         sheet_clean = re.sub(r'[^a-zA-Z0-9]', '', str(sheet)).lower()
         if target_clean in sheet_clean:
@@ -87,7 +120,6 @@ def generate_schedule(excel_source):
         if 'Status' in guru_df.columns:
             guru_status = dict(zip(guru_df['ID Guru'], guru_df['Status'].fillna('')))
 
-    # Penanganan fleksibel nama kolom Slot/Alokasi di Guru_Mengajar
     slot_col = 'Slot'
     for c in gm_df.columns:
         if 'slot' in c.lower() or 'alokasi' in c.lower():
@@ -104,7 +136,6 @@ def generate_schedule(excel_source):
     gm_df['Slot_List'] = gm_df[slot_col].apply(parse_slot_list)
     records = gm_df.to_dict(orient='records')
 
-    # Urutkan Prioritas: PJOK & Mapel durasi besar (3 JP) diutamakan
     def get_priority(item):
         mapel = str(item['Mapel']).lower()
         is_pjok = 'jasmani' in mapel or 'olahraga' in mapel or 'pjok' in mapel or 'm11' in mapel
@@ -124,13 +155,11 @@ def generate_schedule(excel_source):
 
         for block_size in slot_blocks:
             placed = False
-            
-            # Percobaan bertahap: strict jam pagi PJOK dulu, lalu fleksibel jika tidak muat
             for strict_pjok in [True, False]:
                 if placed:
                     break
                 for day in days:
-                    # 1. ATURAN HARI MGMP & STATUS GURU
+                    # Aturan MGMP & Status Guru
                     mgmp_day = str(mgmp_days.get(guru_id, '')).strip().lower()
                     status = str(guru_status.get(guru_id, '')).strip().upper()
                     
@@ -140,7 +169,7 @@ def generate_schedule(excel_source):
                     if is_mgmp_day and status == 'GTT':
                         continue
 
-                    # 2. Max 2 JP/hari di kelas sama (kecuali mapel bertotal 3 JP)
+                    # Max 2 JP/hari di kelas sama (kecuali mapel bertotal 3 JP)
                     if block_size != 3:
                         existing_jp = 0
                         for (h, _), entries in schedule_board.items():
@@ -153,14 +182,13 @@ def generate_schedule(excel_source):
 
                     available_jams = slots_by_day.get(day, [])
                     for jam in available_jams:
-                        # Guru Non-GTT (PNS/PPPK): Boleh mengajar di Hari MGMP HANYA Jam 1-3
+                        # Guru Non-GTT: Boleh mengajar di Hari MGMP HANYA Jam 1-3
                         if is_mgmp_day and status != 'GTT':
                             if (jam + block_size - 1) > 3:
                                 continue
 
                         if all((jam + offset) in available_jams for offset in range(block_size)):
-                            
-                            # 3. Validasi Jam PJOK
+                            # Validasi Jam PJOK
                             is_pjok = 'jasmani' in str(mapel).lower() or 'olahraga' in str(mapel).lower() or 'pjok' in str(mapel).lower()
                             if is_pjok and strict_pjok:
                                 tingkat = str(kelas)[0] if str(kelas)[0].isdigit() else ''
@@ -172,7 +200,7 @@ def generate_schedule(excel_source):
                                     if jam != 4:
                                         continue
 
-                            # 4. Cek Bentrok Slot
+                            # Cek Bentrok
                             bentrok = False
                             for offset in range(block_size):
                                 slot_key = (day, jam + offset)
@@ -212,8 +240,7 @@ def generate_schedule(excel_source):
     for (hari, jam), assignments in schedule_board.items():
         for item in assignments:
             nama_depan = clean_first_name(item['nama_guru'])
-            mapel_singkat = MAPEL_SHORT.get(str(item['mapel']).strip(), str(item['mapel'])[:4])
-            kode_mapel = MAPEL_TO_KODE.get(str(item['mapel']).strip(), 'MXX')
+            kode_mapel, mapel_singkat = get_mapel_info(item['mapel'])
 
             rows.append({
                 'Hari': hari,
@@ -279,12 +306,12 @@ tab_nama, tab_kode, tab_detail, tab_unassigned = st.tabs([
 
 with tab_nama:
     st.subheader("1. Tampilan Matriks: Singkatan Mapel & Nama Depan Guru")
-    st.caption("Contoh isi sel: IPA (Purwanto)")
+    st.caption("Contoh isi sel: BIG (Lestari)")
     st.dataframe(matrix_nama, use_container_width=True)
 
 with tab_kode:
     st.subheader("2. Tampilan Matriks: Kode Mapel & ID Guru")
-    st.caption("Contoh isi sel: M11 (G14)")
+    st.caption("Contoh isi sel: M10 (G08)")
     st.dataframe(matrix_kode, use_container_width=True)
 
 with tab_detail:
