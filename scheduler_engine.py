@@ -43,37 +43,33 @@ class Scheduler:
                 st.error(f"❌ Gagal menginisialisasi SchedulerSolver: {e}")
                 return pd.DataFrame(), pd.DataFrame()
 
-        # 3. Deteksi dan jalankan method solver yang tersedia
-        is_success = False
-        solver_methods = ['solve', 'solve_schedule', 'run_solver', 'run', 'optimize']
-        executed_method = None
+        # Jaminan bahwa self.assignments tidak None sebelum solve dijalankan
+        if hasattr(self.solver_instance, 'assignments') and self.solver_instance.assignments is None:
+            self.solver_instance.assignments = []
 
-        for method_name in solver_methods:
-            if hasattr(self.solver_instance, method_name):
-                executed_method = getattr(self.solver_instance, method_name)
+        # 3. Jalankan method solve
+        is_success = False
+        try:
+            if hasattr(self.solver_instance, 'solve'):
+                # Coba passing parameter timeout jika diterima oleh solve()
                 try:
-                    # Coba panggil dengan parameter timeout
-                    result = executed_method(time_limit=timeout)
+                    result = self.solver_instance.solve(time_limit=timeout)
                 except TypeError:
                     try:
-                        result = executed_method(timeout_seconds=timeout)
+                        result = self.solver_instance.solve(timeout=timeout)
                     except TypeError:
-                        try:
-                            result = executed_method(timeout=timeout)
-                        except TypeError:
-                            result = executed_method()
+                        result = self.solver_instance.solve()
                 
-                # Evaluasi hasil kembalian method
                 if isinstance(result, bool):
                     is_success = result
                 elif result is not None:
                     is_success = True
-                break
-
-        if executed_method is None:
-            # Tampilkan daftar method yang tersedia untuk debugging jika tidak ada method standar
-            available_methods = [m for m in dir(self.solver_instance) if not m.startswith('_')]
-            st.error(f"❌ Method solver tidak ditemukan. Method yang tersedia di class SchedulerSolver: `{available_methods}`")
+            else:
+                st.error("❌ Method solve() tidak ditemukan pada SchedulerSolver.")
+                return pd.DataFrame(), pd.DataFrame()
+        except Exception as e:
+            st.error(f"❌ Error saat menjalankan solver: {e}")
+            st.code(traceback.format_exc())
             return pd.DataFrame(), pd.DataFrame()
 
         # 4. Ambil hasil jadwal
