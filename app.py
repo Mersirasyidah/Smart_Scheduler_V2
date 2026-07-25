@@ -29,7 +29,7 @@ def clean_first_name(nama_full):
 
 def parse_slot_list(val):
     if pd.isna(val):
-        return [1]  # Default 1 JP jika tidak diisi
+        return [1]
     res = [int(x.strip()) for x in str(val).replace(';', ',').split(',') if str(x).strip().isdigit()]
     return res if res else [1]
 
@@ -94,11 +94,10 @@ def generate_schedule(excel_source):
             slot_col = c
             break
 
-    # KELONGGARAN SLOT KBM: Mengabaikan Istirahat/Upacara, mengambil semua jam belajar
+    # FILTER SLOT KBM
     jenis_col = [c for c in slot_df.columns if 'jenis' in c.lower() or 'keterangan' in c.lower()]
     if jenis_col:
         j_name = jenis_col[0]
-        # Ambil yang BUKAN Istirahat / Upacara / Pembiasaan
         kbm_slots = slot_df[~slot_df[j_name].astype(str).str.upper().str.contains('ISTIRAHAT|UPACARA|PEMBIASAAN|SHOLAT')].dropna(subset=['Jam']).copy()
     else:
         kbm_slots = slot_df.dropna(subset=['Jam']).copy()
@@ -111,20 +110,17 @@ def generate_schedule(excel_source):
     gm_df['ID Guru'] = gm_df['ID Guru'].astype(str).str.strip()
     records = gm_df.to_dict(orient='records')
 
-    # PRASARANA B. INGGRIS: Taruh B. Inggris di paling atas antrean
+    # PRIORITAS B. INGGRIS
     def get_priority(item):
         norm_mapel = normalize_text(item['Mapel'])
         is_inggris = 'inggris' in norm_mapel or 'big' in norm_mapel or 'm10' in norm_mapel
-        if is_inggris:
-            return 0
-        return 1
+        return 0 if is_inggris else 1
 
     records.sort(key=get_priority)
 
     schedule_board = {}
     unassigned = []
 
-    # FASA 1: PENJADWALAN REGULER
     for item in records:
         guru_id = str(item['ID Guru']).strip()
         guru_nama = item['Nama Guru']
@@ -132,37 +128,47 @@ def generate_schedule(excel_source):
         kelas = item['Kelas']
         slot_blocks = item.get('Slot_List', [])
         norm_mapel = normalize_text(mapel)
+        is_inggris = 'inggris' in norm_mapel or 'big' in norm_mapel or 'm10' in norm_mapel
+
+        status_g = str(guru_status.get(guru_id, '')).strip().upper()
+        is_gtt = 'GTT' in status_g
+        mgmp_day = str(mgmp_days.get(guru_id, '')).strip()
 
         for block_size in slot_blocks:
             placed = False
+            
+            # Prioritas pencarian hari untuk Bahasa Inggris
+            search_days = ['Jumat', 'Senin', 'Rabu', 'Kamis', 'Selasa'] if is_inggris else days
+
             for mode in ['strict', 'moderate', 'emergency']:
                 if placed:
                     break
 
-                for day in days:
+                for day in search_days:
                     if placed:
                         break
 
-                    if mode != 'emergency':
-                        already_placed = False
-                        for (h, _), entries in schedule_board.items():
-                            if h == day:
-                                for e in entries:
-                                    if e['kelas'] == kelas and normalize_text(e['mapel']) == norm_mapel:
-                                        already_placed = True
-                                        break
-                            if already_placed:
-                                break
-                        if already_placed:
+                    is_mgmp_today = (mgmp_day.lower() == day.lower())
+
+                    # ATURAN MGMP DENGAN PERTIMBANGAN STATUS GURU:
+                    # 1. Jika Guru GTT -> Dilarang mengajar full seharian di hari MGMP.
+                    # 2. Jika Guru Non-GTT -> Dilarang mengajar jika jam mengajar > jam ke-3.
+                    if is_mgmp_today and mode != 'emergency':
+                        if is_gtt:
                             continue
 
                     available_jams = slots_by_day.get(day, [])
                     
                     for jam in available_jams:
+                        # ATURAN KHUSUS NON-GTT DI HARI MGMP: Hanya boleh Jam 1, 2, atau 3
+                        if is_mgmp_today and not is_gtt:
+                            if (jam + block_size - 1) > 3:
+                                continue
+
                         if not all((jam + offset) in available_jams for offset in range(block_size)):
                             continue
 
-                        # Cek Bentrok
+                        # Cek Bentrok Guru atau Kelas
                         bentrok = False
                         for offset in range(block_size):
                             slot_key = (day, jam + offset)
@@ -197,48 +203,7 @@ def generate_schedule(excel_source):
                     'block_size': block_size
                 })
 
-    # FASA 2: INJEKSI AGRESIF (Membongkar bentrok demi Bahasa Inggris)
-    temp_unassigned = list(unassigned)
-    for u_item in temp_unassigned:
-        norm_m = normalize_text(u_item['mapel'])
-        if 'inggris' in norm_m or 'big' in norm_m or 'm10' in norm_m:
-            kelas_target = u_item['kelas']
-            guru_target = u_item['guru_id']
-            b_size = u_item['block_size']
-            
-            placed_count = 0
-            for day in days:
-                if placed_count == b_size:
-                    break
-                available_jams = slots_by_day.get(day, [])
-                for jam in available_jams:
-                    if placed_count == b_size:
-                        break
-                    sk = (day, jam)
-                    
-                    kelas_kosong = True
-                    guru_bebas = True
-                    if sk in schedule_board:
-                        for e in schedule_board[sk]:
-                            if e['kelas'] == kelas_target:
-                                kelas_kosong = False
-                            if e['guru_id'] == guru_target:
-                                guru_bebas = False
-                    
-                    if kelas_kosong and guru_bebas:
-                        if sk not in schedule_board:
-                            schedule_board[sk] = []
-                        schedule_board[sk].append({
-                            'guru_id': guru_target,
-                            'nama_guru': u_item['nama_guru'],
-                            'mapel': u_item['mapel'],
-                            'kelas': kelas_target
-                        })
-                        placed_count += 1
-            
-            if placed_count > 0:
-                unassigned.remove(u_item)
-
+    # OUTPUT DATA
     rows = []
     for (hari, jam), assignments in schedule_board.items():
         for item in assignments:
@@ -259,17 +224,17 @@ def generate_schedule(excel_source):
 
     return pd.DataFrame(rows), unassigned
 
-# --- EXECUTION ---
+# --- UI STREAMLIT ---
 btn_generate = st.button("🚀 Generate Jadwal Sekarang", type="primary")
 
 if btn_generate or 'df_schedule' not in st.session_state:
-    with st.spinner("Sistem sedang mengolah jadwal..."):
+    with st.spinner("Mengolah jadwal..."):
         try:
             df_sched, unassigned_list = generate_schedule(input_data)
             st.session_state['df_schedule'] = df_sched
             st.session_state['unassigned'] = unassigned_list
         except Exception as e:
-            st.error(f"Terjadi kesalahan saat membaca file Excel: {e}")
+            st.error(f"Error: {e}")
             st.stop()
 
 df_schedule = st.session_state['df_schedule']
@@ -296,25 +261,22 @@ m3.metric("Jumlah Guru", df_schedule['ID Guru'].nunique() if not df_schedule.emp
 m4.metric("Gagal (Unassigned)", len(unassigned), delta_color="inverse")
 
 # TAB DISPLAY
-t1, t2, t3, t4 = st.tabs(["👤 Matriks (Nama)", "🔢 Matriks (Kode)", "📋 Master Detail", "⚠️ Detail Unassigned"])
+t1, t2, t3, t4 = st.tabs(["👤 Matriks (Nama)", "🔢 Matriks (Kode)", "📋 Master Detail", "⚠️ Unassigned"])
 
 with t1:
     st.dataframe(matrix_nama, use_container_width=True)
-
 with t2:
     st.dataframe(matrix_kode, use_container_width=True)
-
 with t3:
     st.dataframe(df_schedule, use_container_width=True)
-
 with t4:
     if unassigned:
-        st.warning(f"Terdapat {len(unassigned)} item gagal dijadwalkan:")
+        st.warning(f"Terdapat {len(unassigned)} item belum terjadwal:")
         st.dataframe(pd.DataFrame(unassigned), use_container_width=True)
     else:
-        st.success("🎉 Seluruh jadwal termasuk Bahasa Inggris berhasil ter-plot!")
+        st.success("🎉 Berhasil! Seluruh jadwal terplot secara optimal sesuai status Guru & MGMP.")
 
-# DOWNLOAD BUTTON
+# DOWNLOAD EXCEL
 buffer = io.BytesIO()
 with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
     matrix_nama.to_excel(writer, sheet_name='Matriks_Nama')
