@@ -56,9 +56,14 @@ def generate_schedule(excel_path):
     slot_df = get_sheet_df(xls, 'Slot')
     gm_df = get_sheet_df(xls, 'Guru_Mengajar')
 
+    # Data MGMP dan Status Guru
     mgmp_days = {}
-    if 'ID Guru' in guru_df.columns and 'Hari MGMP' in guru_df.columns:
-        mgmp_days = dict(zip(guru_df['ID Guru'], guru_df['Hari MGMP'].fillna('')))
+    guru_status = {}
+    if 'ID Guru' in guru_df.columns:
+        if 'Hari MGMP' in guru_df.columns:
+            mgmp_days = dict(zip(guru_df['ID Guru'], guru_df['Hari MGMP'].fillna('')))
+        if 'Status' in guru_df.columns:
+            guru_status = dict(zip(guru_df['ID Guru'], guru_df['Status'].fillna('')))
 
     valid_types = ['PEMBELAJARAN', 'KBM']
     kbm_slots = slot_df[slot_df['Jenis'].astype(str).str.strip().str.upper().isin(valid_types)].dropna(subset=['Jam']).copy()
@@ -91,14 +96,21 @@ def generate_schedule(excel_path):
         for block_size in slot_blocks:
             placed = False
             
-            # Cobalah opsi ketat (ideal jam pagi) dulu, jika tidak cukup coba opsi bebas
+            # Percobaan bertahap: strict jam pagi PJOK dulu, lalu fleksibel jika tidak muat
             for strict_pjok in [True, False]:
                 if placed:
                     break
                 for day in days:
-                    # 1. Cek Libur MGMP
+                    # 1. ATURAN HARI MGMP & STATUS GURU
                     mgmp_day = str(mgmp_days.get(guru_id, '')).strip().lower()
-                    if mgmp_day == day.lower():
+                    status = str(guru_status.get(guru_id, '')).strip().upper()
+                    
+                    is_mgmp_day = (mgmp_day == day.lower())
+
+                    # Jika hari ini adalah Hari MGMP bagi Guru:
+                    # - Guru GTT: Libur penuh (TIDAK Boleh Mengajar)
+                    # - Guru Non-GTT (PNS/PPPK): Boleh mengajar HANYA di Jam ke 1-3
+                    if is_mgmp_day and status == 'GTT':
                         continue
 
                     # 2. Max 2 JP/hari di kelas sama (kecuali mapel bertotal 3 JP)
@@ -114,6 +126,11 @@ def generate_schedule(excel_path):
 
                     available_jams = slots_by_day.get(day, [])
                     for jam in available_jams:
+                        # Cek batasan MGMP Non-GTT (Jam ke 1-3 saja, jadi jam + offset <= 3)
+                        if is_mgmp_day and status != 'GTT':
+                            if (jam + block_size - 1) > 3:
+                                continue
+
                         if all((jam + offset) in available_jams for offset in range(block_size)):
                             
                             # 3. Validasi Jam PJOK
@@ -189,7 +206,6 @@ def generate_schedule(excel_path):
 # --- TOMBOL RUN JADWAL ---
 btn_generate = st.button("🚀 Generate Jadwal Sekarang", type="primary", use_container_width=False)
 
-# Jalankan otomatis jika tombol diklik atau saat pertama kali dibuka
 if btn_generate or 'df_schedule' not in st.session_state:
     with st.spinner("Sedang memproses dan mengoptimalkan jadwal..."):
         try:
