@@ -6,7 +6,7 @@ import streamlit as st
 st.set_page_config(page_title="Generator Jadwal Kelas 7", page_icon="🏫", layout="wide")
 
 st.title("🏫 AI Automatic Schedule Generator — Kelas 7 (7A - 7E)")
-st.write("Sistem Plotting Jadwal Khusus Kelas 7 (Penyebaran Mapel 5 JP ke 3 Hari Berbeda).")
+st.write("Sistem Plotting Jadwal Khusus Kelas 7 (Pancasila 2+1 JP, PAI 3 JP, PAI 7A Locked Kamis Jam 1-3).")
 
 # --- SIDEBAR & FILE INPUT ---
 st.sidebar.header("📁 Input Database")
@@ -109,7 +109,7 @@ def generate_schedule_kelas_7(excel_source):
             'mgmp_day': mgmp_day
         }
 
-    # Pembentukan Gugus Tugas Per Mapel
+    # Pembentukan Gugus Tugas Per Mapel Sesuai Aturan Baru
     assignment_groups = []
     for _, item in gm_df.iterrows():
         g_id = str(item['ID Guru']).strip()
@@ -117,25 +117,28 @@ def generate_schedule_kelas_7(excel_source):
         m_lower = mapel.lower()
         kelas = item['Kelas']
 
-        # Konfigurasi Pemecahan JP & Jeda Hari
+        # Skema JP Terbaru:
         if any(k in m_lower for k in ['matematika', 'mtk', 'ipa', 'ilmu pengetahuan alam', 'indonesia', 'bin']):
-            blocks = [2, 2, 1]  # 5 JP dipecah 3 kali pertemuan di 3 hari berbeda
-            min_gap = 1         # Jeda minimal 1 hari antar pertemuan
-        elif 'pjok' in m_lower or 'jasmani' in m_lower:
-            blocks = [3]
-            min_gap = 0
-        elif 'ips' in m_lower or 'ilmu pengetahuan sosial' in m_lower:
-            blocks = [2, 2]     # 4 JP dipecah 2 kali pertemuan
+            blocks = [2, 2, 1]  # 5 JP -> 3 kali (2, 2, 1 JP)
             min_gap = 1
-        elif any(k in m_lower for k in ['informatika', 'prakarya', 'seni', 'pancasila', 'pp', 'pkn']):
-            blocks = [3]
+        elif 'pjok' in m_lower or 'jasmani' in m_lower:
+            blocks = [3]        # PJOK 3 JP sekaligus
             min_gap = 0
+        elif 'agama' in m_lower or 'pai' in m_lower:
+            blocks = [3]        # Agama Islam 3 JP sekaligus
+            min_gap = 0
+        elif any(k in m_lower for k in ['pancasila', 'pp', 'pkn']):
+            blocks = [2, 1]     # Pancasila 3 JP -> Dipecah 2 hari (2 JP + 1 JP)
+            min_gap = 1
+        elif 'ips' in m_lower or 'ilmu pengetahuan sosial' in m_lower:
+            blocks = [2, 2]     # IPS 4 JP -> 2 kali (2 JP + 2 JP)
+            min_gap = 1
         elif 'jawa' in m_lower or 'bjw' in m_lower:
-            blocks = [2]
+            blocks = [2]        # Bahasa Jawa 2 JP
             min_gap = 0
         else:
-            blocks = [2, 2]
-            min_gap = 1
+            blocks = [3]        # Mapel 3 JP lainnya (Informatika, Prakarya, Seni)
+            min_gap = 0
 
         assignment_groups.append({
             'guru_id': g_id,
@@ -146,12 +149,19 @@ def generate_schedule_kelas_7(excel_source):
             'min_gap': min_gap
         })
 
-    # Urutkan Prioritas Plotting
+    # PRIORITAS PLOTTING:
+    # 0: PAI 7A (Terkunci Kamis Jam 1-3)
+    # 1: PJOK
+    # 2: PAI Kelas Lain
+    # 3: Matematika & IPA
+    # 4: Mapel Lainnya
     def priority_key(group):
         m = group['mapel'].lower()
+        k = group['kelas']
+        if ('agama' in m or 'pai' in m) and k == '7A': return 0
         if 'pjok' in m or 'jasmani' in m: return 1
-        if 'matematika' in m or 'mtk' in m: return 2
-        if 'ipa' in m or 'ilmu pengetahuan alam' in m: return 3
+        if 'agama' in m or 'pai' in m: return 2
+        if any(x in m for x in ['matematika', 'mtk', 'ipa', 'ilmu pengetahuan alam']): return 3
         return 4
 
     assignment_groups.sort(key=priority_key)
@@ -168,16 +178,44 @@ def generate_schedule_kelas_7(excel_source):
         min_gap = group['min_gap']
         g_meta = guru_info.get(g_id, {'is_gtt': True, 'mgmp_day': None})
 
-        # Pelacakan Hari Pertemuan untuk Mapel Ini di Kelas Ini
         scheduled_days_idx = []
 
         for b_size in blocks:
             block_placed = False
 
+            # --- ATURAN KHUSUS: PAI KELAS 7A (LOCKED: KAMIS JAM 1-3) ---
+            if ('agama' in m_lower or 'pai' in m_lower) and kelas == '7A':
+                target_day = 'Kamis'
+                target_jams = [1, 2, 3]
+                bentrok = False
+
+                for j in target_jams:
+                    if (target_day, j) in schedule_board:
+                        for e in schedule_board[(target_day, j)]:
+                            if e['guru_id'] == g_id or e['kelas'] == kelas:
+                                bentrok = True; break
+                if not bentrok:
+                    for j in target_jams:
+                        schedule_board.setdefault((target_day, j), []).append({
+                            'guru_id': g_id, 'nama_guru': group['nama_guru'],
+                            'mapel': mapel, 'kelas': kelas
+                        })
+                    scheduled_days_idx.append(DAY_INDEX[target_day])
+                    block_placed = True
+                    continue
+                else:
+                    # Jika terpaksa bentrok, masukkan ke unassigned
+                    unassigned.append({
+                        'guru_id': g_id, 'nama_guru': group['nama_guru'],
+                        'kelas': kelas, 'mapel': mapel, 'block_size': b_size
+                    })
+                    continue
+
+            # --- PLOTTING REGULER BROWSE HARI ---
             for day in DAYS:
                 d_idx = DAY_INDEX[day]
 
-                # Cek Aturan Spasi/Jeda Hari Antar Pertemuan Mapel Yang Sama
+                # Cek Aturan Jeda Hari Antar Pertemuan (misal Pancasila 2 JP & 1 JP)
                 if scheduled_days_idx:
                     if any(abs(d_idx - past_idx) <= min_gap for past_idx in scheduled_days_idx):
                         continue
