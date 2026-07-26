@@ -6,7 +6,7 @@ import streamlit as st
 st.set_page_config(page_title="Generator Jadwal Kelas 7", page_icon="🏫", layout="wide")
 
 st.title("🏫 AI Automatic Schedule Generator — Kelas 7 (7A - 7E)")
-st.write("Sistem Plotting Jadwal Kelas 7 (MTK 2+2+1, BIG 2+2, BIN 2+2+2, Pancasila 2+1).")
+st.write("Sistem Plotting Jadwal Kelas 7 (IPA & MTK Strict 2+2+1 JP, Optimalisasi Slot Kosong).")
 
 # --- SIDEBAR & FILE INPUT ---
 st.sidebar.header("📁 Input Database")
@@ -117,33 +117,36 @@ def generate_schedule_kelas_7(excel_source):
         m_lower = mapel.lower()
         kelas = item['Kelas']
 
-        # SKEMA ALOKASI TERBARU:
-        if any(k in m_lower for k in ['indonesia', 'bin']):
-            blocks = [2, 2, 2]  # Bahasa Indonesia 6 JP -> 3 hari (2 JP, 2 JP, 2 JP)
+        # KUNCI KETAT PEMBAGIAN JAM:
+        if 'indonesia' in m_lower or 'bin' in m_lower:
+            blocks = [2, 2, 2]  # B. Indonesia 6 JP (3 Hari)
             min_gap = 1
-        elif any(k in m_lower for k in ['matematika', 'mtk', 'ipa', 'ilmu pengetahuan alam']):
-            blocks = [2, 2, 1]  # Matematika & IPA 5 JP -> 3 hari (2 JP, 2 JP, 1 JP)
+        elif 'ipa' in m_lower or 'ilmu pengetahuan alam' in m_lower:
+            blocks = [2, 2, 1]  # IPA 5 JP (Strict: 2 JP, 2 JP, 1 JP)
             min_gap = 1
-        elif any(k in m_lower for k in ['inggris', 'big']):
-            blocks = [2, 2]     # Bahasa Inggris 4 JP -> 2 hari (2 JP, 2 JP)
+        elif 'matematika' in m_lower or 'mtk' in m_lower:
+            blocks = [2, 2, 1]  # Matematika 5 JP (Strict: 2 JP, 2 JP, 1 JP)
+            min_gap = 1
+        elif 'inggris' in m_lower or 'big' in m_lower:
+            blocks = [2, 2]     # B. Inggris 4 JP (2 Hari)
             min_gap = 1
         elif 'ips' in m_lower or 'ilmu pengetahuan sosial' in m_lower:
-            blocks = [2, 2]     # IPS 4 JP -> 2 hari (2 JP, 2 JP)
+            blocks = [2, 2]     # IPS 4 JP (2 Hari)
             min_gap = 1
         elif any(k in m_lower for k in ['pancasila', 'pp', 'pkn']):
-            blocks = [2, 1]     # Pancasila 3 JP -> 2 hari (2 JP, 1 JP)
+            blocks = [2, 1]     # Pancasila 3 JP (2 Hari: 2 JP + 1 JP)
             min_gap = 1
         elif 'pjok' in m_lower or 'jasmani' in m_lower:
-            blocks = [3]        # PJOK 3 JP langsung
+            blocks = [3]        # PJOK 3 JP Langsung
             min_gap = 0
         elif 'agama' in m_lower or 'pai' in m_lower:
-            blocks = [3]        # PAI 3 JP langsung
+            blocks = [3]        # PAI 3 JP Langsung
             min_gap = 0
         elif 'jawa' in m_lower or 'bjw' in m_lower:
             blocks = [2]        # B. Jawa 2 JP
             min_gap = 0
         else:
-            blocks = [3]        # Informatika, Prakarya, Seni 3 JP
+            blocks = [3]        # Mapel 3 JP lainnya (Informatika/Prakarya/Seni)
             min_gap = 0
 
         assignment_groups.append({
@@ -157,10 +160,10 @@ def generate_schedule_kelas_7(excel_source):
 
     # PRIORITAS PLOTTING:
     # 0: PAI 7A (Terkunci Kamis Jam 1-3)
-    # 1: PJOK (Jam Depan Pagi)
+    # 1: PJOK (Jam Pagi)
     # 2: PAI Kelas Lain
-    # 3: Mapel Beban Besar (Bahasa Indonesia 6 JP)
-    # 4: Mapel 5 JP & 4 JP
+    # 3: Bahasa Indonesia (6 JP)
+    # 4: IPA & Matematika (5 JP)
     # 5: Mapel Lainnya
     def priority_key(group):
         m = group['mapel'].lower()
@@ -169,7 +172,7 @@ def generate_schedule_kelas_7(excel_source):
         if 'pjok' in m or 'jasmani' in m: return 1
         if 'agama' in m or 'pai' in m: return 2
         if 'indonesia' in m or 'bin' in m: return 3
-        if any(x in m for x in ['matematika', 'mtk', 'ipa', 'inggris', 'big']): return 4
+        if any(x in m for x in ['ipa', 'matematika', 'mtk']): return 4
         return 5
 
     assignment_groups.sort(key=priority_key)
@@ -218,19 +221,23 @@ def generate_schedule_kelas_7(excel_source):
                     })
                     continue
 
-            # Pass 1 (Strict Jeda Hari), Pass 2 (Fleksibel khusus potongan 1 JP jika terdesak)
-            max_passes = 2 if b_size == 1 else 1
-
-            for pass_num in range(1, max_passes + 1):
+            # Multi-Pass Search Engine:
+            # Pass 1: Mencari slot ideal dengan memperhitungkan jeda hari.
+            # Pass 2: Jika terdesak/slot penuh, longgarkan aturan jeda hari agar semua slot terisi.
+            for pass_num in [1, 2]:
                 if block_placed: break
 
                 for day in DAYS:
                     d_idx = DAY_INDEX[day]
 
-                    # Cek Jeda Hari (Pass 1)
+                    # Periksa Jeda Hari di Pass 1
                     if pass_num == 1 and scheduled_days_idx and min_gap > 0:
                         if any(abs(d_idx - past_idx) <= min_gap for past_idx in scheduled_days_idx):
                             continue
+
+                    # Di Pass 2, pastikan tidak menimpa di hari yang sama jika belum terdesak
+                    if pass_num == 2 and d_idx in scheduled_days_idx:
+                        continue
 
                     avail_jams = slots_by_day.get(day, [])
 
@@ -270,7 +277,7 @@ def generate_schedule_kelas_7(excel_source):
                         if not all((jam + offset) in valid_jams for offset in range(b_size)):
                             continue
 
-                        # KUNCI BATASAN: Maksimal 5 Mapel Berbeda Per Hari Per Kelas
+                        # BATASAN KETAT: Maksimal 5 Mapel Berbeda Per Hari Per Kelas
                         current_mapels_day = set()
                         for (d, j), entries in schedule_board.items():
                             if d == day:
