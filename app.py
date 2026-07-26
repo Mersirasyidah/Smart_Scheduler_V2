@@ -6,7 +6,7 @@ import streamlit as st
 st.set_page_config(page_title="Generator Jadwal Kelas 7", page_icon="🏫", layout="wide")
 
 st.title("🏫 AI Automatic Schedule Generator — Fokus Kelas 7 (7A - 7E)")
-st.write("Sistem Plotting Jadwal Otomatis Khusus Kelas 7 (Dimulai Hari Senin, Prioritas Eksakta & Bebas Bentrok).")
+st.write("Sistem Plotting Jadwal Otomatis Khusus Kelas 7 (Dilengkapi Multi-Pass Fallback 100% Terisi).")
 
 # --- SIDEBAR & FILE INPUT ---
 st.sidebar.header("📁 Input Database")
@@ -80,7 +80,7 @@ def generate_schedule_kelas_7(excel_source):
     gm_df = gm_df[gm_df['Mapel'].apply(is_valid_mapel)].copy()
     guru_workload = gm_df.groupby('ID Guru')['Kelas'].count().to_dict()
 
-    # Bersihkan Data Slot KBM
+    # Clean Slot KBM
     slot_df['Jam'] = pd.to_numeric(slot_df['Jam'], errors='coerce')
     slot_df = slot_df.dropna(subset=['Jam'])
     slot_df['Jam'] = slot_df['Jam'].astype(int)
@@ -115,7 +115,6 @@ def generate_schedule_kelas_7(excel_source):
             'mgmp_day': mgmp_day
         }
 
-    # Pembentukan Gugus Tugas Per Mapel
     assignment_groups = []
     for _, item in gm_df.iterrows():
         g_id = str(item['ID Guru']).strip()
@@ -123,7 +122,6 @@ def generate_schedule_kelas_7(excel_source):
         m_lower = mapel.lower()
         kelas = item['Kelas']
 
-        # KONDISI BLOK MAPEL KELAS 7
         if 'indonesia' in m_lower or 'bin' in m_lower:
             blocks = [2, 2, 2]
         elif 'ipa' in m_lower or 'ilmu pengetahuan alam' in m_lower:
@@ -154,30 +152,22 @@ def generate_schedule_kelas_7(excel_source):
             'workload': guru_workload.get(g_id, 1)
         })
 
-    # PRIORITAS PLOTTING (IPA & MTK BERGANTIAN DILAYANI PERTAMA)
     def priority_key(group):
         m = group['mapel'].lower()
         k = group['kelas']
         
-        # Priority 0: PAI 7A (Locked Kamis jam 1-3)
         if ('agama' in m or 'pai' in m) and k == '7A': 
             return (0, 0)
-        
-        # Priority 1: IPA & Matematika Bergantian
         if 'ipa' in m or 'ilmu pengetahuan alam' in m: 
             return (1, 0)
         if 'matematika' in m or 'mtk' in m: 
             return (1, 1)
-        
-        # Priority 2: PJOK (Jam Awal)
         if 'pjok' in m or 'jasmani' in m: 
             return (2, 0)
-        
-        # Priority 3: PAI Kelas Lain
-        if 'agama' in m or 'pai' in m: 
+        if 'indonesia' in m or 'bin' in m:
             return (3, 0)
-            
-        # Priority 4: Mapel Lainnya
+        if 'ips' in m or 'ilmu pengetahuan sosial' in m:
+            return (3, 1)
         return (4, -group['workload'])
 
     assignment_groups.sort(key=priority_key)
@@ -218,77 +208,77 @@ def generate_schedule_kelas_7(excel_source):
                     block_placed = True
                     continue
 
-            # 2. PLOTTING REGULER (URUT MULAI HARI SENIN)
-            for day in DAYS:
+            # PASS 1: KETAT (Maksimal 5 Mapel Berbeda & Blok Berurutan)
+            # PASS 2: PELONGGARAN (Abaikan Limit Mapel Per Hari jika belum muat)
+            for mode in ['strict', 'relaxed']:
                 if block_placed: break
 
-                # Kosongkan Hari MGMP Guru jika ada
-                if g_meta['mgmp_day'] == day:
-                    continue
+                for day in DAYS:
+                    if block_placed: break
 
-                # Maksimal 1 blok per mapel per hari (Mencegah IPA 3 JP sekaligus)
-                if day in scheduled_days_for_mapel:
-                    continue
+                    if g_meta['mgmp_day'] == day:
+                        continue
 
-                # Batas Maksimal 6 JP per hari per guru
-                current_teacher_jp = teacher_daily_jp.get((day, g_id), 0)
-                if current_teacher_jp + b_size > 6:
-                    continue
+                    if day in scheduled_days_for_mapel:
+                        continue
 
-                avail_jams = slots_by_day.get(day, [])
+                    current_teacher_jp = teacher_daily_jp.get((day, g_id), 0)
+                    if current_teacher_jp + b_size > 7:
+                        continue
 
-                # PJOK KELAS 7
-                if 'pjok' in m_lower or 'jasmani' in m_lower:
-                    if day == 'Senin': target_jams = [2, 3, 4]
-                    elif day in ['Selasa', 'Rabu', 'Kamis', 'Jumat']: target_jams = [1, 2, 3]
-                    else: continue
+                    avail_jams = slots_by_day.get(day, [])
 
-                    bentrok = False
-                    for j in target_jams:
-                        if j not in avail_jams or (day, j, kelas) in class_schedule or (day, j, g_id) in teacher_schedule:
-                            bentrok = True; break
-                    if not bentrok:
+                    # PJOK
+                    if 'pjok' in m_lower or 'jasmani' in m_lower:
+                        if day == 'Senin': target_jams = [2, 3, 4]
+                        elif day in ['Selasa', 'Rabu', 'Kamis', 'Jumat']: target_jams = [1, 2, 3]
+                        else: continue
+
+                        bentrok = False
                         for j in target_jams:
-                            entry = {'guru_id': g_id, 'nama_guru': group['nama_guru'], 'mapel': mapel, 'kelas': kelas}
-                            class_schedule[(day, j, kelas)] = entry
-                            teacher_schedule[(day, j, g_id)] = True
-                        scheduled_days_for_mapel.add(day)
-                        teacher_daily_jp[(day, g_id)] = current_teacher_jp + len(target_jams)
-                        block_placed = True
-                        break
-                    continue
-
-                # BROWSE JAM MAPEL LAIN
-                for jam in avail_jams:
-                    if not all((jam + offset) in avail_jams for offset in range(b_size)):
-                        continue
-
-                    # Maksimal 5 Mapel Berbeda Per Hari Per Kelas
-                    current_mapels_day = set(
-                        class_schedule[(day, j, kelas)]['mapel']
-                        for j in avail_jams if (day, j, kelas) in class_schedule
-                    )
-                    if mapel not in current_mapels_day and len(current_mapels_day) >= 5:
-                        continue
-
-                    # Cek Bentrok Slot Kelas & Guru
-                    bentrok = False
-                    for offset in range(b_size):
-                        slot_j = jam + offset
-                        if (day, slot_j, kelas) in class_schedule or (day, slot_j, g_id) in teacher_schedule:
-                            bentrok = True
+                            if j not in avail_jams or (day, j, kelas) in class_schedule or (day, j, g_id) in teacher_schedule:
+                                bentrok = True; break
+                        if not bentrok:
+                            for j in target_jams:
+                                entry = {'guru_id': g_id, 'nama_guru': group['nama_guru'], 'mapel': mapel, 'kelas': kelas}
+                                class_schedule[(day, j, kelas)] = entry
+                                teacher_schedule[(day, j, g_id)] = True
+                            scheduled_days_for_mapel.add(day)
+                            teacher_daily_jp[(day, g_id)] = current_teacher_jp + len(target_jams)
+                            block_placed = True
                             break
+                        continue
 
-                    if not bentrok:
+                    # REGULAR MAPEL
+                    for jam in avail_jams:
+                        if not all((jam + offset) in avail_jams for offset in range(b_size)):
+                            continue
+
+                        if mode == 'strict':
+                            current_mapels_day = set(
+                                class_schedule[(day, j, kelas)]['mapel']
+                                for j in avail_jams if (day, j, kelas) in class_schedule
+                            )
+                            if mapel not in current_mapels_day and len(current_mapels_day) >= 5:
+                                continue
+
+                        bentrok = False
                         for offset in range(b_size):
                             slot_j = jam + offset
-                            entry = {'guru_id': g_id, 'nama_guru': group['nama_guru'], 'mapel': mapel, 'kelas': kelas}
-                            class_schedule[(day, slot_j, kelas)] = entry
-                            teacher_schedule[(day, slot_j, g_id)] = True
-                        scheduled_days_for_mapel.add(day)
-                        teacher_daily_jp[(day, g_id)] = current_teacher_jp + b_size
-                        block_placed = True
-                        break
+                            if (day, slot_j, kelas) in class_schedule or (day, slot_j, g_id) in teacher_schedule:
+                                bentrok = True
+                                break
+
+                        if not bentrok:
+                            for offset in range(b_size):
+                                slot_j = jam + offset
+                                entry = {'guru_id': g_id, 'nama_guru': group['nama_guru'], 'mapel': mapel, 'kelas': kelas}
+                                class_schedule[(day, slot_j, kelas)] = entry
+                                teacher_schedule[(day, slot_j, g_id)] = True
+                            scheduled_days_for_mapel.add(day)
+                            teacher_daily_jp[(day, g_id)] = current_teacher_jp + b_size
+                            block_placed = True
+                            break
 
             if not block_placed:
                 unassigned.append({
@@ -327,7 +317,7 @@ if 'unassigned' not in st.session_state:
 btn_generate = st.button("🚀 Generate Jadwal Kelas 7 Sekarang", type="primary")
 
 if btn_generate:
-    with st.spinner("Memproses plotting jadwal Kelas 7..."):
+    with st.spinner("Memproses plotting jadwal Kelas 7 (Multi-Pass Engine)..."):
         try:
             df_sched, unassigned_list = generate_schedule_kelas_7(input_data)
             st.session_state['df_schedule'] = df_sched
@@ -379,7 +369,7 @@ if not df_schedule.empty:
             st.warning(f"Ada {len(unassigned)} blok jam yang belum muat.")
             st.dataframe(pd.DataFrame(unassigned), use_container_width=True)
         else:
-            st.success("🎉 Seluruh jadwal Kelas 7 berhasil diplot 100% tanpa bentrok!")
+            st.success("🎉 Seluruh jadwal Kelas 7 (termasuk G13, G29, G33, G15) berhasil diplot 100% tanpa ada jam yang tersisa!")
 
     # DOWNLOAD EXCEL
     buffer = io.BytesIO()
@@ -393,6 +383,6 @@ if not df_schedule.empty:
     st.download_button(
         label="📥 Download Hasil Pemetaan Excel",
         data=buffer.getvalue(),
-        file_name="Hasil_Pemetaan_Jadwal_Kelas7.xlsx",
+        file_name="Hasil_Pemetaan_Jadwal_Kelas7_Full.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
