@@ -6,7 +6,7 @@ import streamlit as st
 st.set_page_config(page_title="Generator Jadwal Kelas 7", page_icon="🏫", layout="wide")
 
 st.title("🏫 AI Automatic Schedule Generator — Kelas 7 (7A - 7E)")
-st.write("Sistem Plotting Jadwal Khusus Kelas 7 (Pancasila 2+1 JP, PAI 3 JP, PAI 7A Locked Kamis Jam 1-3).")
+st.write("Sistem Plotting Jadwal Kelas 7 (Pengisian Slot 1 JP & Maksimal 5 Mapel/Hari).")
 
 # --- SIDEBAR & FILE INPUT ---
 st.sidebar.header("📁 Input Database")
@@ -109,7 +109,7 @@ def generate_schedule_kelas_7(excel_source):
             'mgmp_day': mgmp_day
         }
 
-    # Pembentukan Gugus Tugas Per Mapel Sesuai Aturan Baru
+    # Pembentukan Gugus Tugas Per Mapel
     assignment_groups = []
     for _, item in gm_df.iterrows():
         g_id = str(item['ID Guru']).strip()
@@ -117,27 +117,26 @@ def generate_schedule_kelas_7(excel_source):
         m_lower = mapel.lower()
         kelas = item['Kelas']
 
-        # Skema JP Terbaru:
         if any(k in m_lower for k in ['matematika', 'mtk', 'ipa', 'ilmu pengetahuan alam', 'indonesia', 'bin']):
-            blocks = [2, 2, 1]  # 5 JP -> 3 kali (2, 2, 1 JP)
+            blocks = [2, 2, 1]
             min_gap = 1
         elif 'pjok' in m_lower or 'jasmani' in m_lower:
-            blocks = [3]        # PJOK 3 JP sekaligus
+            blocks = [3]
             min_gap = 0
         elif 'agama' in m_lower or 'pai' in m_lower:
-            blocks = [3]        # Agama Islam 3 JP sekaligus
+            blocks = [3]
             min_gap = 0
         elif any(k in m_lower for k in ['pancasila', 'pp', 'pkn']):
-            blocks = [2, 1]     # Pancasila 3 JP -> Dipecah 2 hari (2 JP + 1 JP)
+            blocks = [2, 1]
             min_gap = 1
         elif 'ips' in m_lower or 'ilmu pengetahuan sosial' in m_lower:
-            blocks = [2, 2]     # IPS 4 JP -> 2 kali (2 JP + 2 JP)
+            blocks = [2, 2]
             min_gap = 1
         elif 'jawa' in m_lower or 'bjw' in m_lower:
-            blocks = [2]        # Bahasa Jawa 2 JP
+            blocks = [2]
             min_gap = 0
         else:
-            blocks = [3]        # Mapel 3 JP lainnya (Informatika, Prakarya, Seni)
+            blocks = [3]
             min_gap = 0
 
         assignment_groups.append({
@@ -153,16 +152,15 @@ def generate_schedule_kelas_7(excel_source):
     # 0: PAI 7A (Terkunci Kamis Jam 1-3)
     # 1: PJOK
     # 2: PAI Kelas Lain
-    # 3: Matematika & IPA
-    # 4: Mapel Lainnya
+    # 3: Block Besarnya dulu (>= 2 JP)
+    # 4: Sisa potongan 1 JP (Matematika, IPA, Pancasila)
     def priority_key(group):
         m = group['mapel'].lower()
         k = group['kelas']
         if ('agama' in m or 'pai' in m) and k == '7A': return 0
         if 'pjok' in m or 'jasmani' in m: return 1
         if 'agama' in m or 'pai' in m: return 2
-        if any(x in m for x in ['matematika', 'mtk', 'ipa', 'ilmu pengetahuan alam']): return 3
-        return 4
+        return 3
 
     assignment_groups.sort(key=priority_key)
 
@@ -204,94 +202,98 @@ def generate_schedule_kelas_7(excel_source):
                     block_placed = True
                     continue
                 else:
-                    # Jika terpaksa bentrok, masukkan ke unassigned
                     unassigned.append({
                         'guru_id': g_id, 'nama_guru': group['nama_guru'],
                         'kelas': kelas, 'mapel': mapel, 'block_size': b_size
                     })
                     continue
 
-            # --- PLOTTING REGULER BROWSE HARI ---
-            for day in DAYS:
-                d_idx = DAY_INDEX[day]
+            # --- DUA PASS PLOTTING: Pass 1 (Strict Jeda), Pass 2 (Fleksibel jika 1 JP) ---
+            max_passes = 2 if b_size == 1 else 1
 
-                # Cek Aturan Jeda Hari Antar Pertemuan (misal Pancasila 2 JP & 1 JP)
-                if scheduled_days_idx:
-                    if any(abs(d_idx - past_idx) <= min_gap for past_idx in scheduled_days_idx):
-                        continue
+            for pass_num in range(1, max_passes + 1):
+                if block_placed: break
 
-                avail_jams = slots_by_day.get(day, [])
+                for day in DAYS:
+                    d_idx = DAY_INDEX[day]
 
-                # --- ATURAN KHUSUS PJOK ---
-                if 'pjok' in m_lower or 'jasmani' in m_lower:
-                    if day == 'Senin':
-                        target_jams = [2, 3, 4]
-                    elif day in ['Selasa', 'Rabu', 'Kamis']:
-                        target_jams = [1, 2, 3]
-                    else:
-                        continue
+                    # Pass 1: Gunakan jeda hari jika dipersyaratkan. Pass 2: Abaikan jeda jika 1 JP belum terisi.
+                    if pass_num == 1 and scheduled_days_idx and min_gap > 0:
+                        if any(abs(d_idx - past_idx) <= min_gap for past_idx in scheduled_days_idx):
+                            continue
 
-                    bentrok = False
-                    for j in target_jams:
-                        if j not in avail_jams or (day, j) in schedule_board:
-                            for e in schedule_board.get((day, j), []):
-                                if e['guru_id'] == g_id or e['kelas'] == kelas:
-                                    bentrok = True; break
-                    if not bentrok:
+                    avail_jams = slots_by_day.get(day, [])
+
+                    # --- ATURAN KHUSUS PJOK ---
+                    if 'pjok' in m_lower or 'jasmani' in m_lower:
+                        if day == 'Senin':
+                            target_jams = [2, 3, 4]
+                        elif day in ['Selasa', 'Rabu', 'Kamis']:
+                            target_jams = [1, 2, 3]
+                        else:
+                            continue
+
+                        bentrok = False
                         for j in target_jams:
-                            schedule_board.setdefault((day, j), []).append({
-                                'guru_id': g_id, 'nama_guru': group['nama_guru'],
-                                'mapel': mapel, 'kelas': kelas
-                            })
-                        scheduled_days_idx.append(d_idx)
-                        block_placed = True
-                        break
-                    continue
-
-                # --- ATURAN MGMP NON-GTT ---
-                valid_jams = list(avail_jams)
-                if not g_meta['is_gtt'] and g_meta['mgmp_day'] == day:
-                    valid_jams = [j for j in avail_jams if j <= 3]
-
-                # --- BROWSE JAM KBM ---
-                for jam in valid_jams:
-                    if not all((jam + offset) in valid_jams for offset in range(b_size)):
+                            if j not in avail_jams or (day, j) in schedule_board:
+                                for e in schedule_board.get((day, j), []):
+                                    if e['guru_id'] == g_id or e['kelas'] == kelas:
+                                        bentrok = True; break
+                        if not bentrok:
+                            for j in target_jams:
+                                schedule_board.setdefault((day, j), []).append({
+                                    'guru_id': g_id, 'nama_guru': group['nama_guru'],
+                                    'mapel': mapel, 'kelas': kelas
+                                })
+                            scheduled_days_idx.append(d_idx)
+                            block_placed = True
+                            break
                         continue
 
-                    # Maksimal 5 Mapel Berbeda Per Hari Per Kelas
-                    current_mapels_day = set()
-                    for (d, j), entries in schedule_board.items():
-                        if d == day:
-                            for e in entries:
-                                if e['kelas'] == kelas:
-                                    current_mapels_day.add(e['mapel'])
+                    # --- ATURAN MGMP NON-GTT ---
+                    valid_jams = list(avail_jams)
+                    if not g_meta['is_gtt'] and g_meta['mgmp_day'] == day:
+                        valid_jams = [j for j in avail_jams if j <= 3]
 
-                    if mapel not in current_mapels_day and len(current_mapels_day) >= 5:
-                        continue
+                    # --- BROWSE JAM KBM ---
+                    for jam in valid_jams:
+                        if not all((jam + offset) in valid_jams for offset in range(b_size)):
+                            continue
 
-                    # Cek Bentrok Jam (Guru / Kelas)
-                    bentrok = False
-                    for offset in range(b_size):
-                        slot_key = (day, jam + offset)
-                        if slot_key in schedule_board:
-                            for e in schedule_board[slot_key]:
-                                if e['guru_id'] == g_id or e['kelas'] == kelas:
-                                    bentrok = True; break
-                        if bentrok: break
+                        # BATASAN KETAT: Maksimal 5 Mapel Berbeda Per Hari Per Kelas
+                        current_mapels_day = set()
+                        for (d, j), entries in schedule_board.items():
+                            if d == day:
+                                for e in entries:
+                                    if e['kelas'] == kelas:
+                                        current_mapels_day.add(e['mapel'])
 
-                    if not bentrok:
+                        if mapel not in current_mapels_day and len(current_mapels_day) >= 5:
+                            continue
+
+                        # Cek Bentrok Jam (Guru / Kelas)
+                        bentrok = False
                         for offset in range(b_size):
                             slot_key = (day, jam + offset)
-                            schedule_board.setdefault(slot_key, []).append({
-                                'guru_id': g_id, 'nama_guru': group['nama_guru'],
-                                'mapel': mapel, 'kelas': kelas
-                            })
-                        scheduled_days_idx.append(d_idx)
-                        block_placed = True
-                        break
+                            if slot_key in schedule_board:
+                                for e in schedule_board[slot_key]:
+                                    if e['guru_id'] == g_id or e['kelas'] == kelas:
+                                        bentrok = True; break
+                            if bentrok: break
 
-                if block_placed:
-                    break
+                        if not bentrok:
+                            for offset in range(b_size):
+                                slot_key = (day, jam + offset)
+                                schedule_board.setdefault(slot_key, []).append({
+                                    'guru_id': g_id, 'nama_guru': group['nama_guru'],
+                                    'mapel': mapel, 'kelas': kelas
+                                })
+                            scheduled_days_idx.append(d_idx)
+                            block_placed = True
+                            break
+
+                    if block_placed:
+                        break
 
             if not block_placed:
                 unassigned.append({
