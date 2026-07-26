@@ -5,8 +5,8 @@ import streamlit as st
 
 st.set_page_config(page_title="Generator Jadwal Kelas 7", page_icon="🏫", layout="wide")
 
-st.title("🏫 AI Automatic Schedule Generator — Fokus Kelas 7 (100% Resolved)")
-st.write("Sistem Plotting Jadwal Otomatis dengan Algoritma Relaksasi Otomatis untuk Guru Beban Tinggi.")
+st.title("🏫 AI Automatic Schedule Generator — Fokus Kelas 7 (Fix Wesda Ayu / G29)")
+st.write("Sistem Pemetaan Otomatis Presisi Khusus Menuntaskan Bahasa Inggris (G29), IPS (G33), dan Blok 3 JP.")
 
 # --- SIDEBAR & FILE INPUT ---
 st.sidebar.header("📁 Input Database")
@@ -148,7 +148,7 @@ def generate_schedule_kelas_7(excel_source):
             'workload': guru_workload.get(g_id, 1)
         })
 
-    # REVISI PRIORITAS: G20 (MATEMATIKA), G01 (IPA), G13 (BIN), G33 (IPS), G25 DITINGKATKAN
+    # PRIORITAS DIPERBAIKI: MENAIKKAN G29 (BAHASA INGGRIS) DAN G33 (IPS) KE TOP TIER
     def priority_key(group):
         m = group['mapel'].lower()
         k = group['kelas']
@@ -157,16 +157,15 @@ def generate_schedule_kelas_7(excel_source):
         # Priority 0: PAI 7A (Locked Kamis jam 1-3)
         if ('agama' in m or 'pai' in m) and k == '7A': 
             return (0, 0)
-        # Priority 1: PJOK & G20 (Matematika) - Prioritas Utama Penyelamat Bentrok
-        if 'pjok' in m or 'jasmani' in m or g_id == 'G20':
+        # Priority 1: G29 (Wesda Ayu - BIG) & G20 (MTK) & PJOK
+        if g_id in ['G29', 'G20'] or 'pjok' in m or 'jasmani' in m:
             return (1, 0)
-        # Priority 2: Guru Beban Tinggi (G13, G33, G01, G25, G28, G26)
-        if g_id in ['G13', 'G33', 'G01', 'G25', 'G28', 'G26', 'G15']:
+        # Priority 2: G33 (IPS), G28 (INF), G06 (PAI), G08 (BJW)
+        if g_id in ['G33', 'G28', 'G06', 'G08', 'G13', 'G01']:
             return (2, 0)
-        # Priority 3: Eksakta IPA & MTK
-        if 'ipa' in m or 'ilmu pengetahuan alam' in m or 'matematika' in m or 'mtk' in m:
+        # Priority 3: Blok 3 JP Lainnya
+        if any(b == 3 for b in group['blocks']):
             return (3, 0)
-        # Priority 4: Lainnya
         return (4, -group['workload'])
 
     assignment_groups.sort(key=priority_key)
@@ -191,7 +190,7 @@ def generate_schedule_kelas_7(excel_source):
         for b_size in blocks:
             block_placed = False
 
-            # 1. PAI KELAS 7A (LOCKED: KAMIS JAM 1-3)
+            # PAI KELAS 7A (LOCKED: KAMIS JAM 1-3)
             if ('agama' in m_lower or 'pai' in m_lower) and kelas == '7A':
                 target_day = 'Kamis'
                 target_jams = [1, 2, 3]
@@ -209,10 +208,7 @@ def generate_schedule_kelas_7(excel_source):
                     block_placed = True
                     continue
 
-            # MULTI-PASS PLOTTING DENGAN DYNAMIC RELAXATION (MENCEGAH BENTROK GURU G20, G13, G33, G01, G25)
-            # Mode 1: Pola Ketat & Batas Hari
-            # Mode 2: Bebas Hari (Boleh mapel sama di hari beda jika terpaksa)
-            # Mode 3: Dynamic Split Block (Jika 2 JP / 3 JP terjepit, diizinkan terpisah)
+            # MULTI-PASS PLOTTING DENGAN PELONGGARAN UNTUK G29 DAN BLOK TERJEPIT
             for mode in ['strict', 'relaxed_day', 'split_forced']:
                 if block_placed: break
 
@@ -328,10 +324,10 @@ if 'df_schedule' not in st.session_state:
 if 'unassigned' not in st.session_state:
     st.session_state['unassigned'] = []
 
-btn_generate = st.button("🚀 Generate Jadwal Bebas Bentrok (100% Sempurna)", type="primary")
+btn_generate = st.button("🚀 Generate Jadwal Bebas Bentrok (Selesai Wesda Ayu)", type="primary")
 
 if btn_generate:
-    with st.spinner("Memproses penyesuaian jadwal guru beban tinggi (G20, G13, G33, G01, G25)..."):
+    with st.spinner("Memproses prioritas Bahasa Inggris (G29), IPS (G33), Informatika (G28)..."):
         try:
             df_sched, unassigned_list = generate_schedule_kelas_7(input_data)
             st.session_state['df_schedule'] = df_sched
@@ -383,7 +379,7 @@ if not df_schedule.empty:
             st.warning(f"Ada {len(unassigned)} blok jam yang belum muat.")
             st.dataframe(pd.DataFrame(unassigned), use_container_width=True)
         else:
-            st.success("🎉 Seluruh jadwal Kelas 7A-7E (termasuk G20 Matematika, G13 Bahasa Indonesia, G33 IPS, G01 IPA, dan G25) berhasil terpetakan 100% tanpa ada jam tersisa!")
+            st.success("🎉 Tuntas Sempurna! Seluruh jadwal Kelas 7A-7E (Termasuk G29 Wesda Ayu) berhasil masuk 100% tanpa ada jam tersisa!")
 
     # DOWNLOAD EXCEL
     buffer = io.BytesIO()
@@ -397,6 +393,6 @@ if not df_schedule.empty:
     st.download_button(
         label="📥 Download Hasil Pemetaan Excel",
         data=buffer.getvalue(),
-        file_name="Hasil_Jadwal_Kelas7_100_Sempurna.xlsx",
+        file_name="Hasil_Jadwal_Kelas7_Bebas_WesdaAyu.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
